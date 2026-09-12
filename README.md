@@ -38,7 +38,7 @@ WEB_PORT=3000 API_PORT=9000 docker compose up --build -d
 docker compose up --build --exit-code-from verify verify
 ```
 
-`verify` 会经由 web 的 nginx 代理与 api 直连分别检查：非法输入返回 422 且定位到字段、不写入记录、锯口计入卷容量、决胜规则输出唯一方案、每卷可逐段复算、方案持久化并可回查，以及从已保存方案发起调整（携带来源编号、改线段后重新求解、新旧方案各自可回查、来源可跳转、普通新建与无效来源提交分别保持原流程与数据完整）。
+`verify` 会经由 web 的 nginx 代理与 api 直连分别检查：非法输入返回 422 且定位到字段、不写入记录、锯口计入卷容量、决胜规则输出唯一方案、每卷可逐段复算、方案持久化并可回查；还会验收从已保存方案发起调整的来源关联，以及裁切进度的顺序完成、末段撤销、冲突回滚与持久化。
 
 ## 输入边界
 
@@ -73,7 +73,9 @@ docker compose up --build --exit-code-from verify verify
 | GET | `/api/health` | 健康检查（含数据库连通） |
 | POST | `/api/plans` | 创建方案：校验 → 求解 → 持久化，返回完整方案（201） |
 | GET | `/api/plans` | 方案列表（摘要，新的在前，含可空 `source_plan_id`） |
-| GET | `/api/plans/{id}` | 方案详情：每卷裁切顺序、锯口次数、余料（含可空 `source_plan_id`） |
+| GET | `/api/plans/{id}` | 方案详情：每卷裁切顺序、锯口次数、余料、裁切进度（含可空 `source_plan_id`） |
+| POST | `/api/plans/{id}/rolls/{r}/complete` | 完成该卷最前面的待切线段（体 `{"position": n}`） |
+| POST | `/api/plans/{id}/rolls/{r}/undo` | 撤销该卷最后完成的一段（体 `{"position": n}`） |
 
 ### 基于已有方案调整
 
@@ -95,6 +97,30 @@ docker compose up --build --exit-code-from verify verify
 - 来源编号不存在返回 **422**，错误定位到 `source_plan_id` 字段；前端保留全部编辑内容并提示重新选择来源，不生成孤立关联或半成品记录。
 - 详情页与历史列表对带溯源的方案显示「源自方案 #id」链接，可直接跳转；无来源时不显示。
 - 既有数据库升级时自动补齐可空列（`ALTER TABLE ... ADD COLUMN`），既有方案来源为空，列表与详情访问方式不变。
+### 裁切进度登记
+
+换景开工后，领班在方案详情页逐卷登记实际裁切进度：
+
+- 每卷只能按求解结果保存的规范顺序逐段完成；服务端在事务内锁定该卷记录，
+  **只接受最前面的待切段**。成功后写入该段可空的完成时间 `completed_at`，
+  并返回更新后的完整方案（含每卷 `completed_count` 与总计
+  `completed_segment_count`）。
+- 误点只能**撤销该卷最后完成的一段**。
+- 过期页面、越序完成、对已完成段重复操作、非末段撤销均返回 **409 冲突**，
+  数据保持不变；前端提示后重新拉取详情，按服务端真实进度展示，
+  不会覆盖其他卷的记录。
+- 进度只影响 `completed_at` 与完成数量；求解结果、卷序/段序、锯口与余料
+  始终不变。历史方案的 `completed_at` 全为 `null`（视为未完成）。
+
+数据库结构由 Alembic 管理（`api/migrations/`）：应用启动时自动迁移——
+全新库按迁移链建表，旧库先标记到基线版本再补加可空的 `cuts.completed_at`
+列（历史记录保持未完成）；启动兼容迁移同时补齐可空的 `plans.source_plan_id`
+及索引（历史方案来源为空）。已是最新时为空操作。也可手动执行：
+
+```bash
+alembic upgrade head     # 位于 api/ 目录，读取 DATABASE_URL
+```
+
 
 请求示例：
 

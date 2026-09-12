@@ -171,6 +171,92 @@ button:disabled {
   margin: 0 0 10px;
 }
 
+.roll-progress-badge {
+  margin-left: 10px;
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: #2563eb;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  padding: 1px 10px;
+}
+
+.rollbar-segment.is-done {
+  background: #16a34a;
+}
+
+.rollbar-segment.is-next {
+  outline: 3px solid #f59e0b;
+  outline-offset: -3px;
+  font-weight: 700;
+}
+
+.cut-status-list {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cut-status {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  border: 1px solid #e4e7eb;
+  border-radius: 4px;
+  font-size: 0.92rem;
+}
+
+.cut-status-done {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.cut-status-done .cut-status-label {
+  text-decoration: line-through;
+  color: #52606d;
+}
+
+.cut-status-next {
+  background: #fffbeb;
+  border-color: #f59e0b;
+  font-weight: 600;
+}
+
+.cut-status-pending {
+  color: #7b8794;
+}
+
+.cut-status-meta {
+  white-space: nowrap;
+  font-size: 0.85rem;
+  font-weight: 400;
+}
+
+.cut-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.secondary-btn {
+  background: #fff;
+  color: #b45309;
+  border-color: #f59e0b;
+}
+
+.conflict-banner {
+  background: #fffbeb;
+  border: 1px solid #f59e0b;
+  color: #92400e;
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+
 .rollbar {
   display: flex;
   height: 28px;

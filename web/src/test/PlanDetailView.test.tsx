@@ -1,43 +1,60 @@
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import PlanDetailView from '../components/PlanDetailView'
 import type { PlanOut } from '../types'
 
-const plan: PlanOut = {
-  id: 7,
-  roll_length: 1000,
-  kerf_width: 10,
-  rolls_used: 2,
-  total_kerf_count: 1,
-  total_leftover: 400,
-  created_at: '2026-09-12T08:00:00Z',
-  source_plan_id: null,
-  rolls: [
-    {
-      position: 1,
-      segments: [{ id: 'A', length: 600 }],
-      kerf_count: 0,
-      used_length: 600,
-      leftover: 400,
-    },
-    {
-      position: 2,
-      segments: [
-        { id: 'B', length: 590 },
-        { id: 'C', length: 400 },
-      ],
-      kerf_count: 1,
-      used_length: 1000,
-      leftover: 0,
-    },
-  ],
+function makePlan(overrides: Partial<PlanOut> = {}): PlanOut {
+  return {
+    id: 7,
+    roll_length: 1000,
+    kerf_width: 10,
+    rolls_used: 2,
+    total_kerf_count: 1,
+    total_leftover: 400,
+    completed_segment_count: 0,
+    created_at: '2026-09-12T08:00:00Z',
+    source_plan_id: null,
+    rolls: [
+      {
+        position: 1,
+        segments: [{ id: 'A', length: 600, completed_at: null }],
+        kerf_count: 0,
+        used_length: 600,
+        leftover: 400,
+        completed_count: 0,
+      },
+      {
+        position: 2,
+        segments: [
+          { id: 'B', length: 590, completed_at: null },
+          { id: 'C', length: 400, completed_at: null },
+        ],
+        kerf_count: 1,
+        used_length: 1000,
+        leftover: 0,
+        completed_count: 0,
+      },
+    ],
+    ...overrides,
+  }
 }
 
-function renderView(viewPlan: PlanOut = plan) {
+function renderView(
+  viewPlan: PlanOut = makePlan(),
+  busy = false,
+  onComplete = vi.fn(),
+  onUndo = vi.fn(),
+) {
   return render(
     <MemoryRouter>
-      <PlanDetailView plan={viewPlan} />
+      <PlanDetailView
+        plan={viewPlan}
+        busy={busy}
+        onComplete={onComplete}
+        onUndo={onUndo}
+      />
     </MemoryRouter>,
   )
 }
@@ -58,9 +75,143 @@ describe('PlanDetailView', () => {
     expect(text).toContain('990（线长合计）+ 1 × 10（锯口）= 1000 mm ≤ 1000 mm；余料 0 mm；锯口 1 次')
     expect(text).toContain('600（线长合计）+ 0 × 10（锯口）= 600 mm ≤ 1000 mm；余料 400 mm；锯口 0 次')
 
-    // totals
+    // totals — progress starts at 0 and original solution fields still render
     expect(text).toContain('总余料')
     expect(text).toContain('400 mm')
+    expect(screen.getByTestId('overall-progress')).toHaveTextContent('0 / 3 段')
+  })
+
+  it('highlights the first pending cut of each roll and aggregates progress', () => {
+    const plan = makePlan({
+      completed_segment_count: 1,
+      rolls: [
+        {
+          position: 1,
+          segments: [{ id: 'A', length: 600, completed_at: null }],
+          kerf_count: 0,
+          used_length: 600,
+          leftover: 400,
+          completed_count: 0,
+        },
+        {
+          position: 2,
+          segments: [
+            {
+              id: 'B',
+              length: 590,
+              completed_at: '2026-09-12T09:00:00Z',
+            },
+            { id: 'C', length: 400, completed_at: null },
+          ],
+          kerf_count: 1,
+          used_length: 1000,
+          leftover: 0,
+          completed_count: 1,
+        },
+      ],
+    })
+    renderView(plan)
+
+    // roll 1: A is its next cut; roll 2: B done, C is the next cut
+    expect(screen.getByTestId('cut-1-1')).toHaveClass('cut-status-next')
+    expect(screen.getByTestId('cut-2-1')).toHaveClass('cut-status-done')
+    expect(screen.getByTestId('cut-2-2')).toHaveClass('cut-status-next')
+    expect(screen.getByTestId('overall-progress')).toHaveTextContent('1 / 3 段')
+    expect(screen.getByTestId('roll-progress-2')).toHaveTextContent('已完成 1 / 2 段')
+
+    // actions are enabled purely from server state
+    expect(screen.getByTestId('complete-roll-1')).toBeEnabled()
+    expect(screen.getByTestId('complete-roll-2')).toBeEnabled()
+    expect(screen.getByTestId('undo-roll-1')).toBeDisabled()
+    expect(screen.getByTestId('undo-roll-2')).toBeEnabled()
+  })
+
+  it('completes the next cut and undoes the last cut using canonical positions', async () => {
+    const user = userEvent.setup()
+    const onComplete = vi.fn()
+    const onUndo = vi.fn()
+    const { rerender } = renderView(makePlan(), false, onComplete, onUndo)
+
+    await user.click(screen.getByTestId('complete-roll-2'))
+    expect(onComplete).toHaveBeenCalledWith(2, 1)
+    expect(screen.getByTestId('complete-roll-2')).toHaveTextContent(
+      '完成此段（第 1 段：B）',
+    )
+
+    // nothing completed yet -> undo is offered but reports no undoable cut
+    expect(screen.getByTestId('undo-roll-2')).toBeDisabled()
+
+    // simulate the server returning the plan with B finished
+    const afterB = makePlan({
+      completed_segment_count: 1,
+      rolls: [
+        makePlan().rolls[0],
+        {
+          ...makePlan().rolls[1],
+          completed_count: 1,
+          segments: [
+            { id: 'B', length: 590, completed_at: '2026-09-12T09:00:00Z' },
+            { id: 'C', length: 400, completed_at: null },
+          ],
+        },
+      ],
+    })
+    rerender(
+      <MemoryRouter>
+        <PlanDetailView
+          plan={afterB}
+          busy={false}
+          onComplete={onComplete}
+          onUndo={onUndo}
+        />
+      </MemoryRouter>,
+    )
+    await user.click(screen.getByTestId('undo-roll-2'))
+    // only the last completed cut (position 1) is offered for undo
+    expect(onUndo).toHaveBeenCalledWith(2, 1)
+  })
+
+  it('disables every action while a request is in flight', () => {
+    renderView(makePlan(), true)
+    expect(screen.getByTestId('complete-roll-1')).toBeDisabled()
+    expect(screen.getByTestId('complete-roll-2')).toBeDisabled()
+    // undo buttons start disabled here (no completed cuts) and stay locked
+    expect(screen.getByTestId('undo-roll-1')).toBeDisabled()
+    expect(screen.getByTestId('undo-roll-2')).toBeDisabled()
+  })
+
+  it('locks completion on a fully finished roll while keeping undo available', () => {
+    const finished = makePlan({
+      completed_segment_count: 3,
+      rolls: [
+        {
+          position: 1,
+          segments: [
+            { id: 'A', length: 600, completed_at: '2026-09-12T09:00:00Z' },
+          ],
+          kerf_count: 0,
+          used_length: 600,
+          leftover: 400,
+          completed_count: 1,
+        },
+        {
+          position: 2,
+          segments: [
+            { id: 'B', length: 590, completed_at: '2026-09-12T09:01:00Z' },
+            { id: 'C', length: 400, completed_at: '2026-09-12T09:02:00Z' },
+          ],
+          kerf_count: 1,
+          used_length: 1000,
+          leftover: 0,
+          completed_count: 2,
+        },
+      ],
+    })
+    renderView(finished)
+    expect(screen.getByTestId('complete-roll-2')).toBeDisabled()
+    expect(screen.getByTestId('complete-roll-2')).toHaveTextContent('本卷已全部完成')
+    expect(screen.getByTestId('undo-roll-2')).toBeEnabled()
+    expect(screen.getByTestId('overall-progress')).toHaveTextContent('3 / 3 段（全部完成）')
   })
 
   it('offers an "adjust from this plan" entry point', () => {
@@ -71,13 +222,13 @@ describe('PlanDetailView', () => {
   })
 
   it('hides the source line for plans without a source', () => {
-    renderView({ ...plan, source_plan_id: null })
+    renderView(makePlan({ source_plan_id: null }))
     expect(screen.queryByTestId('source-line')).not.toBeInTheDocument()
     expect(screen.queryByText('源自方案')).not.toBeInTheDocument()
   })
 
   it('links to the source plan when provenance exists', () => {
-    renderView({ ...plan, id: 9, source_plan_id: 7 })
+    renderView(makePlan({ id: 9, source_plan_id: 7 }))
     const sourceLine = screen.getByTestId('source-line')
     const link = sourceLine.querySelector('a')
     expect(link).not.toBeNull()

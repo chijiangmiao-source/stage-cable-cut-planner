@@ -11,14 +11,27 @@ interface Props {
 export default function RollBar({ roll, rollLength, kerfWidth }: Props) {
   const parts: ReactElement[] = []
   roll.segments.forEach((seg, i) => {
+    const isDone = seg.completed_at != null
+    const isNext = !isDone && i === roll.completed_count
+    const stateClass = isDone
+      ? 'rollbar-segment is-done'
+      : isNext
+        ? 'rollbar-segment is-next'
+        : 'rollbar-segment'
     parts.push(
       <div
         key={`seg-${seg.id}`}
-        className="rollbar-segment"
+        className={stateClass}
         style={{ width: `${(seg.length / rollLength) * 100}%` }}
-        title={`${seg.id}: ${seg.length} mm`}
+        title={
+          isDone
+            ? `${seg.id}: ${seg.length} mm（已裁切 ${new Date(seg.completed_at as string).toLocaleString()}）`
+            : isNext
+              ? `${seg.id}: ${seg.length} mm（下一段待切）`
+              : `${seg.id}: ${seg.length} mm`
+        }
       >
-        {seg.id}
+        {isDone ? `✓ ${seg.id}` : seg.id}
       </div>,
     )
     if (i < roll.segments.length - 1) {

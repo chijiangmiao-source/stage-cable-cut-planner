@@ -248,6 +248,73 @@ def main():
     check("source-less creation still works",
           status == 201 and ordinary_plan.get("source_plan_id") is None,
           str(ordinary_plan))
+    # --- cutting progress: ordered completion, last-only undo, conflicts ------
+    pid = plan2["id"]
+
+    def action(kind, roll, position, base):
+        return request("POST", f"{base}/api/plans/{pid}/rolls/{roll}/{kind}",
+                       {"position": position})
+
+    def completed(plan, roll):
+        r = next(x for x in plan["rolls"] if x["position"] == roll)
+        return [s["id"] for s in r["segments"] if s["completed_at"] is not None]
+
+    # fresh plans start with no progress and canonical order intact
+    check("new plan has zero completed segments",
+          plan2.get("completed_segment_count") == 0, str(plan2.get("completed_segment_count")))
+
+    status, after_a = action("complete", 1, 1, WEB_URL)  # A first on roll 1
+    check("complete first cut -> 200", status == 200 and completed(after_a, 1) == ["A"],
+          str(status))
+    check("completion timestamp persisted",
+          after_a["rolls"][0]["segments"][0]["completed_at"] is not None)
+    check("other roll untouched by completion",
+          completed(after_a, 2) == [])
+
+    # out-of-order completion (B is next, but a stale page asks for nothing else
+    # than the front pending cut): re-asking for the already-done position conflicts
+    status, body = action("complete", 1, 1, API_URL)
+    check("re-complete the done cut -> 409 conflict", status == 409, str(body))
+
+    status, after_b = action("complete", 1, 2, API_URL)  # B is now next
+    check("complete second cut in order -> 200",
+          status == 200 and completed(after_b, 1) == ["A", "B"], str(status))
+
+    status, after_c = action("complete", 2, 1, WEB_URL)  # C first on roll 2
+    check("rolls progress independently",
+          status == 200 and completed(after_c, 2) == ["C"]
+          and completed(after_c, 1) == ["A", "B"], str(status))
+
+    # non-last undo (A while A,B are done on roll 1) is rejected, data unchanged
+    status, body = action("undo", 1, 1, API_URL)
+    check("undo of a non-last cut -> 409 conflict", status == 409, str(body))
+    status, unchanged = request("GET", f"{API_URL}/api/plans/{pid}")
+    check("data unchanged after rejected undo",
+          completed(unchanged, 1) == ["A", "B"] and completed(unchanged, 2) == ["C"])
+
+    # only the last completed cut of the roll (B) can be undone
+    status, undone = action("undo", 1, 2, WEB_URL)
+    check("undo last cut -> 200 and only that cut is cleared",
+          status == 200 and completed(undone, 1) == ["A"]
+          and completed(undone, 2) == ["C"], str(status))
+
+    # solution figures and canonical order are independent of progress
+    status, final = request("GET", f"{WEB_URL}/api/plans/{pid}")
+    check("progress never changes the solution or canonical order",
+          status == 200
+          and [[s["id"] for s in r["segments"]] for r in final["rolls"]]
+              == [["A", "B"], ["C", "D"]]
+          and [r["kerf_count"] for r in final["rolls"]] == [1, 1]
+          and [r["leftover"] for r in final["rolls"]] == [15, 15])
+
+    # unknown plan / roll are 404; missing position is 422
+    status, _ = request("POST", f"{API_URL}/api/plans/999999/rolls/1/complete",
+                        {"position": 1})
+    check("progress on unknown plan -> 404", status == 404, str(status))
+    status, body = action("complete", 99, 1, WEB_URL)
+    check("progress on unknown roll -> 404", status == 404, str(status))
+    status, _ = request("POST", f"{API_URL}/api/plans/{pid}/rolls/1/complete", {})
+    check("missing position -> 422", status == 422, str(status))
 
     print()
     if failures:

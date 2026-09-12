@@ -25,6 +25,8 @@ class PlanCreate(BaseModel):
 class SegmentOut(BaseModel):
     id: str
     length: int
+    # None while the segment is waiting to be cut; old plans keep None.
+    completed_at: datetime | None = None
 
 
 class RollOut(BaseModel):
@@ -33,6 +35,7 @@ class RollOut(BaseModel):
     kerf_count: int
     used_length: int
     leftover: int
+    completed_count: int = 0
 
 
 class PlanOut(BaseModel):
@@ -44,9 +47,17 @@ class PlanOut(BaseModel):
     rolls_used: int
     total_kerf_count: int
     total_leftover: int
+    completed_segment_count: int = 0
     created_at: datetime
     source_plan_id: int | None = None
     rolls: list[RollOut]
+
+
+class CutAction(BaseModel):
+    # The cut position (1-based, canonical order) the page believes it is
+    # acting on. The server rejects anything other than the true next/last
+    # position with 409 so stale pages cannot advance progress blindly.
+    position: int = Field(ge=1)
 
 
 class PlanSummary(BaseModel):

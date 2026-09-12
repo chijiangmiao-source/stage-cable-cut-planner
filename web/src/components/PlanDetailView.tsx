@@ -1,10 +1,60 @@
 import { Link } from 'react-router-dom'
-import type { PlanOut } from '../types'
+import type { PlanOut, SegmentOut } from '../types'
 import RollBar from './RollBar'
 
-/** Read-only rendering of a persisted plan; every roll shows the full
- *  arithmetic so the foreman can recompute it by hand. */
-export default function PlanDetailView({ plan }: { plan: PlanOut }) {
+interface Props {
+  plan: PlanOut
+  /** True while a complete/undo request is in flight; locks every action. */
+  busy: boolean
+  onComplete: (rollPosition: number, cutPosition: number) => void
+  onUndo: (rollPosition: number, cutPosition: number) => void
+}
+
+function formatTime(iso: string): string {
+  return new Date(iso).toLocaleString()
+}
+
+function SegmentStatus({
+  rollPosition,
+  index,
+  segment,
+  state,
+}: {
+  rollPosition: number
+  index: number
+  segment: SegmentOut
+  state: 'done' | 'next' | 'pending'
+}) {
+  return (
+    <li
+      data-testid={`cut-${rollPosition}-${index + 1}`}
+      className={`cut-status cut-status-${state}`}
+      aria-current={state === 'next' ? 'true' : undefined}
+    >
+      <span className="cut-status-label">
+        第 {index + 1} 段 {segment.id}（{segment.length} mm）
+      </span>
+      {state === 'done' && (
+        <span className="cut-status-meta">
+          ✓ 已裁切 {formatTime(segment.completed_at as string)}
+        </span>
+      )}
+      {state === 'next' && <span className="cut-status-meta">▶ 下一切</span>}
+      {state === 'pending' && <span className="cut-status-meta">待切</span>}
+    </li>
+  )
+}
+
+/** Read-only rendering of a persisted plan plus live cutting progress.
+ *  Every roll shows the full arithmetic so the foreman can recompute it by
+ *  hand; action buttons are enabled solely from the server-provided state. */
+export default function PlanDetailView({ plan, busy, onComplete, onUndo }: Props) {
+  const totalSegments = plan.rolls.reduce(
+    (acc, roll) => acc + roll.segments.length,
+    0,
+  )
+  const allDone = plan.completed_segment_count === totalSegments
+
   return (
     <div className="plan-detail">
       <p className="detail-actions">
@@ -46,6 +96,13 @@ export default function PlanDetailView({ plan }: { plan: PlanOut }) {
           <dd>{plan.total_leftover} mm</dd>
         </div>
         <div>
+          <dt>裁切进度</dt>
+          <dd data-testid="overall-progress">
+            {plan.completed_segment_count} / {totalSegments} 段
+            {allDone && '（全部完成）'}
+          </dd>
+        </div>
+        <div>
           <dt>创建时间</dt>
           <dd>{new Date(plan.created_at).toLocaleString()}</dd>
         </div>
@@ -54,9 +111,25 @@ export default function PlanDetailView({ plan }: { plan: PlanOut }) {
       <h3>逐卷裁切方案</h3>
       {plan.rolls.map((roll) => {
         const lengthSum = roll.segments.reduce((acc, s) => acc + s.length, 0)
+        const total = roll.segments.length
+        const done = roll.completed_count
+        const nextPosition = done < total ? done + 1 : null
+        const nextSegment =
+          nextPosition !== null ? roll.segments[nextPosition - 1] : null
+        const lastSegment = done > 0 ? roll.segments[done - 1] : null
+        const rollDone = nextPosition === null
+
         return (
           <section key={roll.position} className="roll-card">
-            <h4>第 {roll.position} 卷</h4>
+            <h4>
+              第 {roll.position} 卷
+              <span
+                className="roll-progress-badge"
+                data-testid={`roll-progress-${roll.position}`}
+              >
+                已完成 {done} / {total} 段
+              </span>
+            </h4>
             <RollBar
               roll={roll}
               rollLength={plan.roll_length}
@@ -71,6 +144,44 @@ export default function PlanDetailView({ plan }: { plan: PlanOut }) {
               （锯口）= {roll.used_length} mm ≤ {plan.roll_length} mm；余料{' '}
               {roll.leftover} mm；锯口 {roll.kerf_count} 次
             </p>
+
+            <ul className="cut-status-list" aria-label={`第 ${roll.position} 卷裁切进度`}>
+              {roll.segments.map((segment, i) => (
+                <SegmentStatus
+                  key={segment.id}
+                  rollPosition={roll.position}
+                  index={i}
+                  segment={segment}
+                  state={
+                    i < done ? 'done' : i === done && !rollDone ? 'next' : 'pending'
+                  }
+                />
+              ))}
+            </ul>
+
+            <div className="cut-actions">
+              <button
+                type="button"
+                data-testid={`complete-roll-${roll.position}`}
+                disabled={busy || rollDone}
+                onClick={() => onComplete(roll.position, nextPosition as number)}
+              >
+                {rollDone
+                  ? '本卷已全部完成'
+                  : `完成此段（第 ${nextPosition} 段：${nextSegment?.id}）`}
+              </button>
+              <button
+                type="button"
+                className="secondary-btn"
+                data-testid={`undo-roll-${roll.position}`}
+                disabled={busy || done === 0}
+                onClick={() => onUndo(roll.position, done)}
+              >
+                {done === 0
+                  ? '无可撤销段'
+                  : `撤销末段（第 ${done} 段：${lastSegment?.id}）`}
+              </button>
+            </div>
           </section>
         )
       })}

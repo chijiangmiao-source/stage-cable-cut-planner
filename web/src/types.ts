@@ -1,6 +1,8 @@
 export interface SegmentOut {
   id: string
   length: number
+  /** ISO timestamp once this segment has actually been cut; null otherwise. */
+  completed_at: string | null
 }
 
 export interface RollOut {
@@ -9,6 +11,7 @@ export interface RollOut {
   kerf_count: number
   used_length: number
   leftover: number
+  completed_count: number
 }
 
 export interface PlanOut {
@@ -18,6 +21,7 @@ export interface PlanOut {
   rolls_used: number
   total_kerf_count: number
   total_leftover: number
+  completed_segment_count: number
   created_at: string
   source_plan_id: number | null
   rolls: RollOut[]

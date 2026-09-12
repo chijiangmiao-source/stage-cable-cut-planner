@@ -65,5 +65,8 @@ class Cut(Base):
     position = Column(Integer, nullable=False)  # 1-based cutting order
     segment_id = Column(String(32), nullable=False)
     length = Column(Integer, nullable=False)
+    # Null while the segment is still waiting to be cut; set when the
+    # foreman records "complete this segment". Historical rows stay NULL.
+    completed_at = Column(DateTime(timezone=True), nullable=True)
 
     roll = relationship("Roll", back_populates="cuts")

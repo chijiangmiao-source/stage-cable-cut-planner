@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,19 +7,31 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from .db import Base, SessionLocal, engine, run_migrations
+from .migrations import run_startup_migrations
 from .models import Cut, Plan, Roll
-from .schemas import PlanCreate, PlanOut, PlanSummary, RollOut, SegmentOut
+from .schemas import (
+    CutAction,
+    PlanCreate,
+    PlanOut,
+    PlanSummary,
+    RollOut,
+    SegmentOut,
+)
 from .solver import Segment, solve
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # Fresh DBs build through the migration chain; legacy DBs are stamped at
+    # the baseline first, so historical cuts stay unfinished.
+    run_startup_migrations(engine)
+    # Kept as a safety net for environments where migrations cannot run.
     Base.metadata.create_all(bind=engine)
     run_migrations()
     yield
 
 
-app = FastAPI(title="Roll Cutting Planner", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Roll Cutting Planner", version="1.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -40,6 +53,32 @@ def _err(loc: list, msg: str) -> dict:
 
 
 def _plan_to_out(plan: Plan) -> PlanOut:
+    completed_total = 0
+    rolls_out: list[RollOut] = []
+    for roll in plan.rolls:
+        segments: list[SegmentOut] = []
+        completed_in_roll = 0
+        for cut in roll.cuts:
+            if cut.completed_at is not None:
+                completed_in_roll += 1
+            segments.append(
+                SegmentOut(
+                    id=cut.segment_id,
+                    length=cut.length,
+                    completed_at=cut.completed_at,
+                )
+            )
+        completed_total += completed_in_roll
+        rolls_out.append(
+            RollOut(
+                position=roll.position,
+                segments=segments,
+                kerf_count=roll.kerf_count,
+                used_length=roll.used_length,
+                leftover=roll.leftover,
+                completed_count=completed_in_roll,
+            )
+        )
     return PlanOut(
         id=plan.id,
         roll_length=plan.roll_length,
@@ -47,18 +86,10 @@ def _plan_to_out(plan: Plan) -> PlanOut:
         rolls_used=plan.rolls_used,
         total_kerf_count=plan.total_kerf_count,
         total_leftover=plan.total_leftover,
+        completed_segment_count=completed_total,
         created_at=plan.created_at,
         source_plan_id=plan.source_plan_id,
-        rolls=[
-            RollOut(
-                position=roll.position,
-                segments=[SegmentOut(id=c.segment_id, length=c.length) for c in roll.cuts],
-                kerf_count=roll.kerf_count,
-                used_length=roll.used_length,
-                leftover=roll.leftover,
-            )
-            for roll in plan.rolls
-        ],
+        rolls=rolls_out,
     )
 
 
@@ -147,9 +178,108 @@ def list_plans(db: Session = Depends(get_db)):
     return db.scalars(select(Plan).order_by(Plan.id.desc())).all()
 
 
-@app.get("/api/plans/{plan_id}", response_model=PlanOut)
-def get_plan(plan_id: int, db: Session = Depends(get_db)):
+def _get_plan_or_404(db: Session, plan_id: int) -> Plan:
     plan = db.get(Plan, plan_id)
     if plan is None:
         raise HTTPException(status_code=404, detail="plan not found")
-    return _plan_to_out(plan)
+    return plan
+
+
+@app.get("/api/plans/{plan_id}", response_model=PlanOut)
+def get_plan(plan_id: int, db: Session = Depends(get_db)):
+    return _plan_to_out(_get_plan_or_404(db, plan_id))
+
+
+def _locked_roll_cuts(db: Session, plan_id: int, roll_position: int) -> list[Cut]:
+    """Fetch a roll's cuts in canonical order, locking the rows for the
+    duration of the transaction (PostgreSQL). 404 on unknown plan/roll."""
+    _get_plan_or_404(db, plan_id)
+    cuts = list(
+        db.scalars(
+            select(Cut)
+            .join(Roll, Cut.roll_id == Roll.id)
+            .where(Roll.plan_id == plan_id, Roll.position == roll_position)
+            .order_by(Cut.position)
+            .with_for_update()
+        )
+    )
+    if not cuts:
+        raise HTTPException(status_code=404, detail="roll not found")
+    return cuts
+
+
+def _completed_positions(cuts: list[Cut]) -> list[int]:
+    return sorted(c.position for c in cuts if c.completed_at is not None)
+
+
+@app.post("/api/plans/{plan_id}/rolls/{roll_position}/complete", response_model=PlanOut)
+def complete_cut(
+    plan_id: int,
+    roll_position: int,
+    action: CutAction,
+    db: Session = Depends(get_db),
+):
+    """Record the next cut of one roll. Only the roll's first pending cut is
+    accepted; stale/out-of-order requests conflict and change nothing."""
+    try:
+        cuts = _locked_roll_cuts(db, plan_id, roll_position)
+        done = _completed_positions(cuts)
+        next_position = len(done) + 1
+
+        if next_position > len(cuts):
+            raise HTTPException(
+                status_code=409, detail="该卷所有段均已完成，请刷新后查看最新进度"
+            )
+        if action.position != next_position:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"只能按顺序完成第 {next_position} 段，页面可能已过期，请刷新"
+                ),
+            )
+
+        target = cuts[next_position - 1]
+        target.completed_at = datetime.now(timezone.utc)
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+
+    db.expire_all()
+    return _plan_to_out(_get_plan_or_404(db, plan_id))
+
+
+@app.post("/api/plans/{plan_id}/rolls/{roll_position}/undo", response_model=PlanOut)
+def undo_cut(
+    plan_id: int,
+    roll_position: int,
+    action: CutAction,
+    db: Session = Depends(get_db),
+):
+    """Undo the last completed cut of one roll only."""
+    try:
+        cuts = _locked_roll_cuts(db, plan_id, roll_position)
+        done = _completed_positions(cuts)
+
+        if not done:
+            raise HTTPException(
+                status_code=409, detail="该卷还没有已完成的段，无可撤销内容"
+            )
+        last_position = done[-1]
+        if action.position != last_position:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"只能撤销该卷最后完成的第 {last_position} 段，页面可能已过期，请刷新"
+                ),
+            )
+
+        target = cuts[last_position - 1]
+        target.completed_at = None
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+
+    db.expire_all()
+    return _plan_to_out(_get_plan_or_404(db, plan_id))

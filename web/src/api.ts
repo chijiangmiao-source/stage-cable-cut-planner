@@ -53,3 +53,37 @@ export function listPlans(): Promise<PlanSummary[]> {
 export function getPlan(id: string | number): Promise<PlanOut> {
   return request<PlanOut>(`/api/plans/${id}`)
 }
+
+/** Record the next cut of one roll. `position` is the 1-based canonical cut
+ *  position the page currently believes is next; the server answers 409 when
+ *  the page is stale or the order is wrong. */
+export function completeCut(
+  planId: number,
+  rollPosition: number,
+  position: number,
+): Promise<PlanOut> {
+  return request<PlanOut>(
+    `/api/plans/${planId}/rolls/${rollPosition}/complete`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ position }),
+    },
+  )
+}
+
+/** Undo the last completed cut of one roll only. */
+export function undoCut(
+  planId: number,
+  rollPosition: number,
+  position: number,
+): Promise<PlanOut> {
+  return request<PlanOut>(
+    `/api/plans/${planId}/rolls/${rollPosition}/undo`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ position }),
+    },
+  )
+}
