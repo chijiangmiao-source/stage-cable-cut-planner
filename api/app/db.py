@@ -20,27 +20,36 @@ Base = declarative_base()
 
 
 def run_migrations():
-    """Apply minimal forward-only upgrades on an existing database.
+    """Apply compatibility upgrades that predate the Alembic chain.
 
     ``Base.metadata.create_all`` creates missing tables but never alters an
-    existing one, so a previously created PostgreSQL volume keeps the old
-    plans schema. Adding the nullable provenance column leaves every
-    pre-existing row with source_plan_id = NULL and does not change how the
-    list/detail endpoints are reached.
+    existing one. The provenance link stays NULL for historical plans, and
+    historical cuts receive allowance 0 so their packing remains unchanged.
     """
     inspector = inspect(engine)
-    if "plans" not in inspector.get_table_names():
-        return
-    columns = {c["name"] for c in inspector.get_columns("plans")}
-    if "source_plan_id" not in columns:
-        with engine.begin() as conn:
-            conn.execute(
-                text(
-                    "ALTER TABLE plans ADD COLUMN source_plan_id INTEGER "
-                    "REFERENCES plans(id) ON DELETE SET NULL"
+    tables = set(inspector.get_table_names())
+    if "plans" in tables:
+        columns = {c["name"] for c in inspector.get_columns("plans")}
+        if "source_plan_id" not in columns:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "ALTER TABLE plans ADD COLUMN source_plan_id INTEGER "
+                        "REFERENCES plans(id) ON DELETE SET NULL"
+                    )
                 )
-            )
-            conn.execute(
-                text("CREATE INDEX IF NOT EXISTS ix_plans_source_plan_id "
-                     "ON plans (source_plan_id)")
-            )
+                conn.execute(
+                    text("CREATE INDEX IF NOT EXISTS ix_plans_source_plan_id "
+                         "ON plans (source_plan_id)")
+                )
+
+    if "cuts" in tables:
+        columns = {c["name"] for c in inspector.get_columns("cuts")}
+        if "allowance" not in columns:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "ALTER TABLE cuts "
+                        "ADD COLUMN allowance INTEGER NOT NULL DEFAULT 0"
+                    )
+                )

@@ -7,10 +7,12 @@ interface Props {
   kerfWidth: number
 }
 
-/** Proportional bar: segments, kerf gaps between them, leftover at the tail. */
+/** Proportional bar: segments (sized by their cut length, i.e. delivered
+ *  length + allowance), kerf gaps between them, leftover at the tail. */
 export default function RollBar({ roll, rollLength, kerfWidth }: Props) {
   const parts: ReactElement[] = []
   roll.segments.forEach((seg, i) => {
+    const cut = seg.length + seg.allowance
     const isDone = seg.completed_at != null
     const isNext = !isDone && i === roll.completed_count
     const stateClass = isDone
@@ -18,18 +20,21 @@ export default function RollBar({ roll, rollLength, kerfWidth }: Props) {
       : isNext
         ? 'rollbar-segment is-next'
         : 'rollbar-segment'
+    const measurement =
+      seg.allowance > 0
+        ? `${seg.id}: 交付 ${seg.length} mm + 余量 ${seg.allowance} mm = 下料 ${cut} mm`
+        : `${seg.id}: ${seg.length} mm`
+    const title = isDone
+      ? `${measurement}（已裁切 ${new Date(seg.completed_at as string).toLocaleString()}）`
+      : isNext
+        ? `${measurement}（下一段待切）`
+        : measurement
     parts.push(
       <div
         key={`seg-${seg.id}`}
         className={stateClass}
-        style={{ width: `${(seg.length / rollLength) * 100}%` }}
-        title={
-          isDone
-            ? `${seg.id}: ${seg.length} mm（已裁切 ${new Date(seg.completed_at as string).toLocaleString()}）`
-            : isNext
-              ? `${seg.id}: ${seg.length} mm（下一段待切）`
-              : `${seg.id}: ${seg.length} mm`
-        }
+        style={{ width: `${(cut / rollLength) * 100}%` }}
+        title={title}
       >
         {isDone ? `✓ ${seg.id}` : seg.id}
       </div>,

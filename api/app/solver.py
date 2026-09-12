@@ -1,15 +1,17 @@
 """Exact solver for the signal-wire roll cutting problem.
 
-A roll holds a subset of segments. Adjacent segments inside a roll consume
-one kerf (saw cut) each; the head and tail of a roll consume nothing.
-Segments are never split.
+A roll holds a subset of segments. Each segment occupies its delivered
+length plus its end-trim allowance (the actual cutting length) on the
+roll. Adjacent segments inside a roll consume one kerf (saw cut) each;
+the head and tail of a roll consume nothing. Segments are never split.
 
 Objectives, applied in strict lexicographic order:
 
 1. minimize the number of rolls used;
 2. minimize total leftover material
-   (note: total leftover == rolls * roll_length - sum(lengths) - kerf * (n - rolls),
-    so once the roll count is fixed the total leftover is already determined);
+   (note: total leftover == rolls * roll_length - sum(cut lengths)
+    - kerf * (n - rolls), so once the roll count is fixed the total
+    leftover is already determined);
 3. tie-break for uniqueness: sort segment ids ascending inside each roll,
    sort the rolls lexicographically by their id sequences, then pick the
    overall lexicographically smallest plan.
@@ -26,15 +28,22 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class Segment:
     sid: str
-    length: int
+    length: int  # delivered length
+    allowance: int = 0  # end-trim allowance
+
+    @property
+    def cut_length(self) -> int:
+        """Actual length cut from the roll: delivered length + allowance."""
+        return self.length + self.allowance
 
 
 @dataclass(frozen=True)
 class RollPlan:
     segment_ids: tuple[str, ...]  # cutting order: ids ascending
-    lengths: tuple[int, ...]  # lengths aligned with segment_ids
+    lengths: tuple[int, ...]  # delivered lengths aligned with segment_ids
+    allowances: tuple[int, ...]  # allowances aligned with segment_ids
     kerf_count: int  # len(segment_ids) - 1
-    used_length: int  # sum(lengths) + kerf_width * kerf_count
+    used_length: int  # sum(cut lengths) + kerf_width * kerf_count
     leftover: int  # roll_length - used_length
 
 
@@ -50,15 +59,18 @@ def solve(roll_length: int, kerf_width: int, segments: list[Segment]) -> Solutio
     if not segments:
         raise ValueError("at least one segment is required")
     for seg in segments:
-        if seg.length > roll_length:
+        if seg.cut_length > roll_length:
             raise ValueError(
-                f"segment {seg.sid!r} (length {seg.length}) exceeds roll length {roll_length}"
+                f"segment {seg.sid!r} (cut length {seg.cut_length}) "
+                f"exceeds roll length {roll_length}"
             )
 
     # Canonical index order: ids ascending.
     ordered = sorted(segments, key=lambda s: s.sid)
     ids = [s.sid for s in ordered]
     lens = [s.length for s in ordered]
+    allows = [s.allowance for s in ordered]
+    cuts = [s.cut_length for s in ordered]
     n = len(ordered)
     full = (1 << n) - 1
 
@@ -71,7 +83,7 @@ def solve(roll_length: int, kerf_width: int, segments: list[Segment]) -> Solutio
         lsb = mask & -mask
         i = lsb.bit_length() - 1
         prev = mask ^ lsb
-        sum_len[mask] = sum_len[prev] + lens[i]
+        sum_len[mask] = sum_len[prev] + cuts[i]
         count[mask] = count[prev] + 1
         fits[mask] = sum_len[mask] + kerf_width * (count[mask] - 1) <= roll_length
 
@@ -108,20 +120,26 @@ def solve(roll_length: int, kerf_width: int, segments: list[Segment]) -> Solutio
 
         rids: list[str] = []
         rlens: list[int] = []
+        rallows: list[int] = []
         bits = chosen
         while bits:
             lsb = bits & -bits
             i = lsb.bit_length() - 1
             rids.append(ids[i])
             rlens.append(lens[i])
+            rallows.append(allows[i])
             bits ^= lsb
 
         kerf_count = len(rids) - 1
-        used = sum(rlens) + kerf_width * kerf_count
+        used = (
+            sum(length + allowance for length, allowance in zip(rlens, rallows))
+            + kerf_width * kerf_count
+        )
         rolls.append(
             RollPlan(
                 segment_ids=tuple(rids),
                 lengths=tuple(rlens),
+                allowances=tuple(rallows),
                 kerf_count=kerf_count,
                 used_length=used,
                 leftover=roll_length - used,

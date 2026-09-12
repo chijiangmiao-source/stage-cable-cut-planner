@@ -14,6 +14,18 @@ function formatTime(iso: string): string {
   return new Date(iso).toLocaleString()
 }
 
+/** Segments with an allowance show delivery, allowance and actual cut length;
+ * zero-allowance plans retain the original compact wording. */
+function formatSegment(seg: SegmentOut): string {
+  if (seg.allowance > 0) {
+    return (
+      `${seg.id}（交付 ${seg.length} mm + 余量 ${seg.allowance} mm = ` +
+      `下料 ${seg.length + seg.allowance} mm）`
+    )
+  }
+  return `${seg.id}（${seg.length} mm）`
+}
+
 function SegmentStatus({
   rollPosition,
   index,
@@ -32,7 +44,7 @@ function SegmentStatus({
       aria-current={state === 'next' ? 'true' : undefined}
     >
       <span className="cut-status-label">
-        第 {index + 1} 段 {segment.id}（{segment.length} mm）
+        第 {index + 1} 段 {formatSegment(segment)}
       </span>
       {state === 'done' && (
         <span className="cut-status-meta">
@@ -111,6 +123,8 @@ export default function PlanDetailView({ plan, busy, onComplete, onUndo }: Props
       <h3>逐卷裁切方案</h3>
       {plan.rolls.map((roll) => {
         const lengthSum = roll.segments.reduce((acc, s) => acc + s.length, 0)
+        const allowanceSum = roll.segments.reduce((acc, s) => acc + s.allowance, 0)
+        const cutSum = lengthSum + allowanceSum
         const total = roll.segments.length
         const done = roll.completed_count
         const nextPosition = done < total ? done + 1 : null
@@ -137,12 +151,23 @@ export default function PlanDetailView({ plan, busy, onComplete, onUndo }: Props
             />
             <p className="cutting-order">
               裁切顺序：
-              {roll.segments.map((s) => `${s.id}（${s.length} mm）`).join(' → ')}
+              {roll.segments.map(formatSegment).join(' → ')}
             </p>
             <p className="roll-math">
-              {lengthSum}（线长合计）+ {roll.kerf_count} × {plan.kerf_width}
-              （锯口）= {roll.used_length} mm ≤ {plan.roll_length} mm；余料{' '}
-              {roll.leftover} mm；锯口 {roll.kerf_count} 次
+              {allowanceSum > 0 ? (
+                <>
+                  {cutSum}（下料合计 = 交付 {lengthSum} mm + 余量 {allowanceSum}{' '}
+                  mm）+ {roll.kerf_count} × {plan.kerf_width}（锯口）= {roll.used_length}{' '}
+                  mm ≤ {plan.roll_length} mm；余料 {roll.leftover} mm；锯口{' '}
+                  {roll.kerf_count} 次
+                </>
+              ) : (
+                <>
+                  {lengthSum}（线长合计）+ {roll.kerf_count} × {plan.kerf_width}
+                  （锯口）= {roll.used_length} mm ≤ {plan.roll_length} mm；余料{' '}
+                  {roll.leftover} mm；锯口 {roll.kerf_count} 次
+                </>
+              )}
             </p>
 
             <ul className="cut-status-list" aria-label={`第 ${roll.position} 卷裁切进度`}>

@@ -1,6 +1,7 @@
 export interface SegmentOut {
   id: string
   length: number
+  allowance: number
   /** ISO timestamp once this segment has actually been cut; null otherwise. */
   completed_at: string | null
 }
@@ -42,6 +43,7 @@ export interface PlanSummary {
 export interface SegmentInput {
   id: string
   length: number
+  allowance?: number
 }
 
 export interface PlanCreateInput {

@@ -96,6 +96,44 @@ def test_oversized_segment_rejected():
         solve(100, 5, [Segment("A", 101)])
 
 
+# ---------------------------------------------------------------------------
+# End-trim allowance: the cut length (length + allowance) occupies the roll.
+# ---------------------------------------------------------------------------
+
+
+def test_allowance_counts_toward_capacity():
+    # Cut lengths 60 and 50: 60 + 50 + 5 kerf = 115 > 110, so two rolls.
+    # Without the allowance the same segments would share one roll (105 <= 110).
+    segs = [Segment("A", 50, 10), Segment("B", 50)]
+    assert solve(110, 5, segs).rolls_used == 2
+    assert solve(110, 5, [Segment("A", 50), Segment("B", 50)]).rolls_used == 1
+
+
+def test_allowance_exact_fit_with_kerf():
+    # Cut lengths 500 + 490 plus one kerf of 10 fill the roll exactly.
+    sol = solve(1000, 10, [Segment("A", 400, 100), Segment("B", 490)])
+    assert sol.rolls_used == 1
+    assert sol.rolls[0].kerf_count == 1
+    assert sol.rolls[0].used_length == 1000
+    assert sol.rolls[0].leftover == 0
+
+
+def test_roll_plan_carries_delivered_lengths_and_allowances():
+    sol = solve(1000, 10, [Segment("B", 300), Segment("A", 400, 50)])
+    roll = sol.rolls[0]
+    assert roll.segment_ids == ("A", "B")
+    assert roll.lengths == (400, 300)  # delivered lengths, not cut lengths
+    assert roll.allowances == (50, 0)
+    assert roll.used_length == 400 + 50 + 300 + 10
+    # Totals still close: leftover = rolls * roll_length - cuts - kerfs.
+    assert sol.total_leftover == 1000 - 750 - 10
+
+
+def test_oversized_cut_length_rejected():
+    with pytest.raises(ValueError):
+        solve(100, 5, [Segment("A", 100, 1)])
+
+
 def test_twelve_segments_run_quickly():
     segs = [Segment(f"S{i:02d}", 97 + 3 * i) for i in range(12)]
     sol = solve(400, 11, segs)
@@ -125,10 +163,10 @@ def _partitions(n):
 def _brute_force(roll_length, kerf, segments):
     n = len(segments)
     ids = [s.sid for s in segments]
-    lens = [s.length for s in segments]
+    cuts = [s.cut_length for s in segments]
 
     def fits(block):
-        return sum(lens[i] for i in block) + kerf * (len(block) - 1) <= roll_length
+        return sum(cuts[i] for i in block) + kerf * (len(block) - 1) <= roll_length
 
     best_key = None
     best_canonical = None
@@ -149,10 +187,12 @@ def test_matches_brute_force(seed):
     n = rng.randint(1, 8)
     roll_length = rng.randint(30, 120)
     kerf = rng.randint(1, 20)
-    segments = [
-        Segment(f"S{i}", rng.randint(1, roll_length))  # always deliverable
-        for i in range(n)
-    ]
+    segments = []
+    for i in range(n):
+        length = rng.randint(1, roll_length)
+        # Random allowance, always keeping the segment deliverable.
+        allowance = rng.randint(0, roll_length - length)
+        segments.append(Segment(f"S{i}", length, allowance))
     sol = solve(roll_length, kerf, segments)
     expected = _brute_force(roll_length, kerf, segments)
     assert ids_rolls(sol) == expected

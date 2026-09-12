@@ -53,4 +53,18 @@ describe('updateRow', () => {
     expect(rows[1].length).toBe('250')
     expect(rows[1].id).toBe('S2')
   })
+
+  it('patches the allowance field', () => {
+    const a = makeRow('S1', '100')
+    const rows = updateRow([a], a.key, { allowance: '50' })
+    expect(rows[0].allowance).toBe('50')
+    expect(rows[0].length).toBe('100')
+  })
+})
+
+describe('makeRow', () => {
+  it('defaults the allowance to blank (treated as zero)', () => {
+    expect(makeRow('S1', '100').allowance).toBe('')
+    expect(makeRow('S1', '100', '25').allowance).toBe('25')
+  })
 })

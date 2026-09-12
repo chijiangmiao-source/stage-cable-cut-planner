@@ -333,4 +333,77 @@ test.describe('roll cutting planner', () => {
       ).toBeVisible()
     })
   })
+
+  test('allowance changes the packing and the detail survives a reload', async ({
+    page,
+  }) => {
+    await page.goto('/')
+    await page.getByTestId('roll-length').fill('1000')
+    await page.getByTestId('kerf-width').fill('10')
+    await page.getByTestId('segment-id-0').fill('A')
+    await page.getByTestId('segment-length-0').fill('600')
+    await page.getByTestId('segment-id-1').fill('B')
+    await page.getByTestId('segment-length-1').fill('590')
+    await page.getByTestId('segment-id-2').fill('C')
+    await page.getByTestId('segment-length-2').fill('400')
+    // C's allowance pushes its cut length to 450, so B + C no longer fit
+    // one roll: the plan grows from 2 rolls to 3.
+    await page.getByTestId('segment-allowance-2').fill('50')
+    await page.getByTestId('submit-plan').click()
+
+    await expect(page).toHaveURL(/\/plans\/\d+$/)
+    await expect(page.getByText('第 1 卷')).toBeVisible()
+    await expect(page.getByText('第 2 卷')).toBeVisible()
+    await expect(page.getByText('第 3 卷')).toBeVisible()
+    // delivery length, allowance and cut length are all shown
+    await expect(
+      page.locator('.cutting-order').filter({
+        hasText: /C（交付 400 mm \+ 余量 50 mm = 下料 450 mm）/,
+      }),
+    ).toBeVisible()
+    await expect(
+      page.locator('.cutting-order').filter({ hasText: /A（600 mm）/ }),
+    ).toBeVisible()
+    // leftover recomputed from the cut lengths
+    await expect(page.getByText(/余料 550 mm/)).toBeVisible()
+    await expect(page.getByText(/余料 410 mm/)).toBeVisible()
+    await expect(page.getByText(/余料 400 mm/)).toBeVisible()
+
+    // reload: the persisted plan shows the identical roll order and numbers
+    await page.reload()
+    await expect(page.getByText('第 1 卷')).toBeVisible()
+    await expect(page.getByText('第 3 卷')).toBeVisible()
+    await expect(
+      page.locator('.cutting-order').filter({
+        hasText: /C（交付 400 mm \+ 余量 50 mm = 下料 450 mm）/,
+      }),
+    ).toBeVisible()
+    await expect(page.getByText(/余料 550 mm/)).toBeVisible()
+    await expect(page.getByText(/余料 410 mm/)).toBeVisible()
+    await expect(page.getByText(/余料 400 mm/)).toBeVisible()
+  })
+
+  test('length + allowance beyond the roll is located on the allowance input', async ({
+    page,
+  }) => {
+    await page.goto('/')
+    await page.getByTestId('roll-length').fill('500')
+    await page.getByTestId('segment-length-0').fill('400')
+    await page.getByTestId('segment-allowance-0').fill('150')
+    // keep the other rows valid so only the allowance error fires
+    await page.getByTestId('segment-length-1').fill('300')
+    await page.getByTestId('segment-length-2').fill('200')
+    await page.getByTestId('submit-plan').click()
+
+    // server-side 422 mapped back onto the allowance input of the same row
+    await expect(
+      page.getByText('segment length 400 + allowance 150 exceeds usable roll length 500'),
+    ).toBeVisible()
+    // the whole form is preserved
+    await expect(page).toHaveURL(/\/$/)
+    await expect(page.getByTestId('segment-length-0')).toHaveValue('400')
+    await expect(page.getByTestId('segment-allowance-0')).toHaveValue('150')
+    await expect(page.getByTestId('segment-length-1')).toHaveValue('300')
+    await expect(page.getByTestId('segment-length-2')).toHaveValue('200')
+  })
 })

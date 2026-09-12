@@ -316,6 +316,96 @@ def main():
     status, _ = request("POST", f"{API_URL}/api/plans/{pid}/rolls/1/complete", {})
     check("missing position -> 422", status == 422, str(status))
 
+    # --- allowance: omission keeps the legacy plan ---------------------------
+    # case1/case2 above already omitted the field; an explicit zero must
+    # produce the identical packing.
+    case3 = {
+        "roll_length": 1000,
+        "kerf_width": 10,
+        "segments": [
+            {"id": "A", "length": 600},
+            {"id": "B", "length": 590},
+            {"id": "C", "length": 400},
+        ],
+    }
+    status, plan3 = request("POST", f"{API_URL}/api/plans", case3)
+    check("no-allowance case created", status == 201 and isinstance(plan3, dict), str(plan3))
+    if not isinstance(plan3, dict):
+        sys.exit(1)
+    check("omitted allowance keeps the legacy packing [[A],[B,C]]",
+          [[s["id"] for s in r["segments"]] for r in plan3.get("rolls", [])]
+          == [["A"], ["B", "C"]],
+          str(plan3.get("rolls")))
+    check("omitted allowance is reported as 0",
+          all(s.get("allowance") == 0
+              for r in plan3.get("rolls", []) for s in r["segments"]))
+
+    # --- allowance: changes the packing, detail recomputes, persists ---------
+    case4 = {
+        "roll_length": 1000,
+        "kerf_width": 10,
+        "segments": [
+            {"id": "A", "length": 600},
+            {"id": "B", "length": 590},
+            {"id": "C", "length": 400, "allowance": 50},
+        ],
+    }
+    status, plan4 = request("POST", f"{WEB_URL}/api/plans", case4)
+    check("allowance case created", status == 201 and isinstance(plan4, dict), str(plan4))
+    if not isinstance(plan4, dict):
+        sys.exit(1)
+    # C's cut length becomes 450, so B + C (590 + 450 + 10) no longer fits:
+    # the packing grows from 2 rolls to 3.
+    check("allowance changes the packing to [[A],[B],[C]]",
+          [[s["id"] for s in r["segments"]] for r in plan4.get("rolls", [])]
+          == [["A"], ["B"], ["C"]],
+          str(plan4.get("rolls")))
+    check("allowance case leftovers recompute from cut lengths",
+          [r["leftover"] for r in plan4.get("rolls", [])] == [400, 410, 550],
+          str(plan4.get("rolls")))
+    check("allowance persisted on the segment",
+          plan4["rolls"][2]["segments"][0].get("allowance") == 50, str(plan4))
+    for roll in plan4.get("rolls", []):
+        cut_sum = sum(s["length"] + s["allowance"] for s in roll["segments"])
+        total = cut_sum + roll["kerf_count"] * plan4["kerf_width"] + roll["leftover"]
+        check(f"allowance roll {roll['position']} closes: cut lengths + kerfs + leftover = roll length",
+              total == plan4["roll_length"] and roll["used_length"] + roll["leftover"] == plan4["roll_length"])
+
+    status, fetched4 = request("GET", f"{WEB_URL}/api/plans/{plan4['id']}")
+    check("allowance plan detail survives a refetch unchanged",
+          status == 200 and fetched4 == plan4)
+
+    # --- allowance: invalid submissions are located and not persisted --------
+    status, before = request("GET", f"{API_URL}/api/plans")
+    before_count = len(before) if status == 200 and isinstance(before, list) else -1
+
+    bad_range = {
+        "roll_length": 1000,
+        "kerf_width": 10,
+        "segments": [{"id": "A", "length": 100, "allowance": 10001}],
+    }
+    status, body = request("POST", f"{API_URL}/api/plans", bad_range)
+    check("allowance > 10000 -> 422", status == 422, str(body))
+    check("allowance range error locates the allowance input",
+          ["body", "segments", 0, "allowance"] in locs_of(body)
+          or ["segments", 0, "allowance"] in locs_of(body), str(body))
+
+    bad_sum = {
+        "roll_length": 500,
+        "kerf_width": 10,
+        "segments": [{"id": "A", "length": 400, "allowance": 150}],
+    }
+    status, body = request("POST", f"{WEB_URL}/api/plans", bad_sum)
+    check("length + allowance > roll -> 422", status == 422, str(body))
+    check("cut-length overflow locates the allowance input",
+          ["segments", 0, "allowance"] in locs_of(body), str(body))
+
+    status, after = request("GET", f"{API_URL}/api/plans")
+    after_count = len(after) if status == 200 and isinstance(after, list) else -1
+    check("invalid allowance submissions persisted nothing",
+          before_count >= 0 and after_count == before_count,
+          f"before={before_count} after={after_count}")
+
     print()
     if failures:
         print(f"VERIFY FAILED: {len(failures)} check(s) failed")

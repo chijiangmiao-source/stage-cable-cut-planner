@@ -19,7 +19,7 @@ const initial: PlanFormInitial = {
   segments: [
     { id: 'A', length: 600 },
     { id: 'B', length: 590 },
-    { id: 'C', length: 400 },
+    { id: 'C', length: 400, allowance: 50 },
   ],
 }
 
@@ -45,6 +45,7 @@ describe('PlanForm adjustment flow', () => {
     expect(screen.getByTestId('segment-length-0')).toHaveValue(600)
     expect(screen.getByTestId('segment-id-2')).toHaveValue('C')
     expect(screen.getByTestId('segment-length-2')).toHaveValue(400)
+    expect(screen.getByTestId('segment-allowance-2')).toHaveValue(50)
 
     const banner = screen.getByTestId('source-banner')
     expect(banner.textContent).toContain('基于方案 #5 调整')

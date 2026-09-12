@@ -19,7 +19,7 @@ function makePlan(overrides: Partial<PlanOut> = {}): PlanOut {
     rolls: [
       {
         position: 1,
-        segments: [{ id: 'A', length: 600, completed_at: null }],
+        segments: [{ id: 'A', length: 600, allowance: 0, completed_at: null }],
         kerf_count: 0,
         used_length: 600,
         leftover: 400,
@@ -28,8 +28,8 @@ function makePlan(overrides: Partial<PlanOut> = {}): PlanOut {
       {
         position: 2,
         segments: [
-          { id: 'B', length: 590, completed_at: null },
-          { id: 'C', length: 400, completed_at: null },
+          { id: 'B', length: 590, allowance: 0, completed_at: null },
+          { id: 'C', length: 400, allowance: 0, completed_at: null },
         ],
         kerf_count: 1,
         used_length: 1000,
@@ -87,7 +87,7 @@ describe('PlanDetailView', () => {
       rolls: [
         {
           position: 1,
-          segments: [{ id: 'A', length: 600, completed_at: null }],
+          segments: [{ id: 'A', length: 600, allowance: 0, completed_at: null }],
           kerf_count: 0,
           used_length: 600,
           leftover: 400,
@@ -99,9 +99,10 @@ describe('PlanDetailView', () => {
             {
               id: 'B',
               length: 590,
+              allowance: 0,
               completed_at: '2026-09-12T09:00:00Z',
             },
-            { id: 'C', length: 400, completed_at: null },
+            { id: 'C', length: 400, allowance: 0, completed_at: null },
           ],
           kerf_count: 1,
           used_length: 1000,
@@ -150,8 +151,8 @@ describe('PlanDetailView', () => {
           ...makePlan().rolls[1],
           completed_count: 1,
           segments: [
-            { id: 'B', length: 590, completed_at: '2026-09-12T09:00:00Z' },
-            { id: 'C', length: 400, completed_at: null },
+            { id: 'B', length: 590, allowance: 0, completed_at: '2026-09-12T09:00:00Z' },
+            { id: 'C', length: 400, allowance: 0, completed_at: null },
           ],
         },
       ],
@@ -187,7 +188,7 @@ describe('PlanDetailView', () => {
         {
           position: 1,
           segments: [
-            { id: 'A', length: 600, completed_at: '2026-09-12T09:00:00Z' },
+            { id: 'A', length: 600, allowance: 0, completed_at: '2026-09-12T09:00:00Z' },
           ],
           kerf_count: 0,
           used_length: 600,
@@ -197,8 +198,8 @@ describe('PlanDetailView', () => {
         {
           position: 2,
           segments: [
-            { id: 'B', length: 590, completed_at: '2026-09-12T09:01:00Z' },
-            { id: 'C', length: 400, completed_at: '2026-09-12T09:02:00Z' },
+            { id: 'B', length: 590, allowance: 0, completed_at: '2026-09-12T09:01:00Z' },
+            { id: 'C', length: 400, allowance: 0, completed_at: '2026-09-12T09:02:00Z' },
           ],
           kerf_count: 1,
           used_length: 1000,
@@ -236,5 +237,45 @@ describe('PlanDetailView', () => {
     expect(link?.textContent).toBe('#7')
     // the adjust entry of the new plan points at the new plan itself
     expect(screen.getByTestId('adjust-from-plan').getAttribute('href')).toBe('/?from=9')
+  })
+
+  it('shows allowance and recomputes the roll from actual cut lengths', () => {
+    const withAllowance = makePlan({
+      rolls_used: 3,
+      total_kerf_count: 0,
+      total_leftover: 1360,
+      rolls: [
+        {
+          position: 1,
+          segments: [{ id: 'A', length: 600, allowance: 0, completed_at: null }],
+          kerf_count: 0,
+          used_length: 600,
+          leftover: 400,
+          completed_count: 0,
+        },
+        {
+          position: 2,
+          segments: [{ id: 'B', length: 590, allowance: 0, completed_at: null }],
+          kerf_count: 0,
+          used_length: 590,
+          leftover: 410,
+          completed_count: 0,
+        },
+        {
+          position: 3,
+          segments: [{ id: 'C', length: 400, allowance: 50, completed_at: null }],
+          kerf_count: 0,
+          used_length: 450,
+          leftover: 550,
+          completed_count: 0,
+        },
+      ],
+    })
+    const { container } = renderView(withAllowance)
+    const text = container.textContent ?? ''
+    expect(text).toContain('C（交付 400 mm + 余量 50 mm = 下料 450 mm）')
+    expect(text).toContain(
+      '450（下料合计 = 交付 400 mm + 余量 50 mm）+ 0 × 10（锯口）= 450 mm ≤ 1000 mm；余料 550 mm；锯口 0 次',
+    )
   })
 })

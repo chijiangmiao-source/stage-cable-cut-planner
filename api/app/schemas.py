@@ -4,6 +4,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 MIN_LEN = 1
 MAX_LEN = 100000
+MIN_ALLOWANCE = 0
+MAX_ALLOWANCE = 10000
 MAX_SEGMENTS = 12
 ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$"
 
@@ -11,6 +13,8 @@ ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$"
 class SegmentIn(BaseModel):
     id: str = Field(pattern=ID_PATTERN)
     length: int = Field(ge=MIN_LEN, le=MAX_LEN)
+    # Optional end-trim allowance; omitted means 0 (legacy clients).
+    allowance: int = Field(default=0, ge=MIN_ALLOWANCE, le=MAX_ALLOWANCE)
 
 
 class PlanCreate(BaseModel):
@@ -25,6 +29,7 @@ class PlanCreate(BaseModel):
 class SegmentOut(BaseModel):
     id: str
     length: int
+    allowance: int
     # None while the segment is waiting to be cut; old plans keep None.
     completed_at: datetime | None = None
 

@@ -228,3 +228,94 @@ def test_chains_of_adjustments_keep_direct_source(client):
     assert second["source_plan_id"] == first["id"]
     assert third["source_plan_id"] == second["id"]
     assert client.get(f"/api/plans/{first['id']}").json()["source_plan_id"] is None
+# ---------------------------------------------------------------------------
+# End-trim allowance (端头加工余量)
+# ---------------------------------------------------------------------------
+
+
+def test_allowance_omitted_matches_legacy_behavior(client):
+    # Old clients send no allowance: the plan must be identical to the
+    # pre-allowance behavior, with allowance reported as 0.
+    resp = client.post("/api/plans", json=valid_payload())
+    assert resp.status_code == 201
+    plan = resp.json()
+    assert plan["rolls_used"] == 2
+    assert [[s["id"] for s in r["segments"]] for r in plan["rolls"]] == [
+        ["A"],
+        ["B", "C"],
+    ]
+    assert [r["leftover"] for r in plan["rolls"]] == [400, 0]
+    assert all(
+        s["allowance"] == 0 for r in plan["rolls"] for s in r["segments"]
+    )
+
+    # Explicit zeros must produce exactly the same plan.
+    payload = valid_payload()
+    for seg in payload["segments"]:
+        seg["allowance"] = 0
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 201
+    again = resp.json()
+    assert [[s["id"] for s in r["segments"]] for r in again["rolls"]] == [
+        ["A"],
+        ["B", "C"],
+    ]
+    assert again["total_leftover"] == plan["total_leftover"]
+
+
+def test_allowance_changes_packing_and_detail_closes(client):
+    # C's allowance pushes its cut length to 450, so B+C (590+450+10) no
+    # longer fits one roll: the packing changes from 2 rolls to 3.
+    payload = valid_payload()
+    payload["segments"][2]["allowance"] = 50
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 201
+    plan = resp.json()
+    assert plan["rolls_used"] == 3
+    assert [[s["id"] for s in r["segments"]] for r in plan["rolls"]] == [
+        ["A"],
+        ["B"],
+        ["C"],
+    ]
+    # Roll math closes on cut lengths: sum(length+allowance) + kerfs + leftover
+    # == roll_length for every roll.
+    for roll in plan["rolls"]:
+        cut_sum = sum(s["length"] + s["allowance"] for s in roll["segments"])
+        assert roll["used_length"] == cut_sum + roll["kerf_count"] * plan["kerf_width"]
+        assert roll["used_length"] + roll["leftover"] == plan["roll_length"]
+    assert [r["leftover"] for r in plan["rolls"]] == [400, 410, 550]
+    assert plan["total_leftover"] == 1360
+    # The allowance is persisted and returned by the detail endpoint.
+    assert plan["rolls"][2]["segments"][0]["allowance"] == 50
+
+    detail = client.get(f"/api/plans/{plan['id']}")
+    assert detail.status_code == 200
+    assert detail.json() == plan
+
+
+def test_allowance_out_of_range_rejected_and_not_persisted(client):
+    for bad in (-1, 10001):
+        payload = valid_payload()
+        payload["segments"][1]["allowance"] = bad
+        resp = client.post("/api/plans", json=payload)
+        assert resp.status_code == 422
+        locs = [e["loc"] for e in resp.json()["detail"]]
+        assert ["body", "segments", 1, "allowance"] in locs
+    assert client.get("/api/plans").json() == []
+
+
+def test_length_plus_allowance_exceeding_roll_located_at_allowance(client):
+    payload = valid_payload(roll_length=500)
+    payload["segments"] = [
+        {"id": "A", "length": 400, "allowance": 150},  # 550 > 500: allowance's fault
+        {"id": "B", "length": 600, "allowance": 10},  # 600 > 500: length's fault
+        {"id": "C", "length": 450, "allowance": 50},  # 500 <= 500: fits exactly
+    ]
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 422
+    locs = [e["loc"] for e in resp.json()["detail"]]
+    assert ["segments", 0, "allowance"] in locs
+    assert ["segments", 1, "length"] in locs
+    # C fits, so no error points at it at all.
+    assert all(loc[1] != 2 for loc in locs if len(loc) == 3)
+    assert client.get("/api/plans").json() == []

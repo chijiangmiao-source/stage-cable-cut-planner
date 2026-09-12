@@ -31,7 +31,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="Roll Cutting Planner", version="1.1.0", lifespan=lifespan)
+app = FastAPI(title="Roll Cutting Planner", version="1.2.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -65,6 +65,7 @@ def _plan_to_out(plan: Plan) -> PlanOut:
                 SegmentOut(
                     id=cut.segment_id,
                     length=cut.length,
+                    allowance=cut.allowance,
                     completed_at=cut.completed_at,
                 )
             )
@@ -120,6 +121,16 @@ def create_plan(payload: PlanCreate, db: Session = Depends(get_db)):
                     f"{payload.roll_length}",
                 )
             )
+        elif seg.length + seg.allowance > payload.roll_length:
+            # The delivered length alone fits; the allowance is what pushes
+            # the actual cutting length past the roll, so blame that input.
+            errors.append(
+                _err(
+                    ["segments", i, "allowance"],
+                    f"segment length {seg.length} + allowance {seg.allowance} "
+                    f"exceeds usable roll length {payload.roll_length}",
+                )
+            )
 
     # Provenance check: an adjustment request must name an existing plan.
     # A missing source is a field-level 422 (the form keeps all edits and
@@ -142,7 +153,7 @@ def create_plan(payload: PlanCreate, db: Session = Depends(get_db)):
     solution = solve(
         payload.roll_length,
         payload.kerf_width,
-        [Segment(s.id, s.length) for s in payload.segments],
+        [Segment(s.id, s.length, s.allowance) for s in payload.segments],
     )
 
     plan = Plan(
@@ -161,10 +172,17 @@ def create_plan(payload: PlanCreate, db: Session = Depends(get_db)):
             used_length=roll.used_length,
             leftover=roll.leftover,
         )
-        for cut_pos, (sid, length) in enumerate(
-            zip(roll.segment_ids, roll.lengths), start=1
+        for cut_pos, (sid, length, allowance) in enumerate(
+            zip(roll.segment_ids, roll.lengths, roll.allowances), start=1
         ):
-            db_roll.cuts.append(Cut(position=cut_pos, segment_id=sid, length=length))
+            db_roll.cuts.append(
+                Cut(
+                    position=cut_pos,
+                    segment_id=sid,
+                    length=length,
+                    allowance=allowance,
+                )
+            )
         plan.rolls.append(db_roll)
 
     db.add(plan)

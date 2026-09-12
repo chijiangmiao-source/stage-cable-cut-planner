@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { ApiError, createPlan } from '../api'
 import { groupErrors } from '../errors'
 import {
+  MAX_ALLOWANCE,
   MAX_SEGMENTS,
   addRow,
   makeRow,
@@ -15,7 +16,7 @@ import type { SegmentRow } from '../segmentRows'
 export interface PlanFormInitial {
   roll_length: number
   kerf_width: number
-  segments: { id: string; length: number }[]
+  segments: { id: string; length: number; allowance?: number }[]
 }
 
 interface PlanFormProps {
@@ -44,7 +45,9 @@ export default function PlanForm({ initial, sourcePlanId = null }: PlanFormProps
   )
   const [rows, setRows] = useState<SegmentRow[]>(() =>
     initial
-      ? initial.segments.map((s) => makeRow(s.id, String(s.length)))
+      ? initial.segments.map((s) =>
+          makeRow(s.id, String(s.length), String(s.allowance ?? 0)),
+        )
       : [
           makeRow('S1', '600'),
           makeRow('S2', '590'),
@@ -96,12 +99,26 @@ export default function PlanForm({ initial, sourcePlanId = null }: PlanFormProps
       }
       return value
     }
+    // Optional end-trim allowance: blank means 0.
+    const parseAllowance = (raw: string, key: string): number => {
+      if (!raw.trim()) return 0
+      const value = Number(raw)
+      if (!Number.isInteger(value) || value < 0 || value > MAX_ALLOWANCE) {
+        push(key, `余量须为 0 至 ${MAX_ALLOWANCE} 的整数毫米`)
+        return 0
+      }
+      return value
+    }
     const roll_length = parseLen(rollLength, 'roll_length')
     const kerf_width = parseLen(kerfWidth, 'kerf_width')
     const segments = rows.map((row, i) => {
       const id = row.id.trim()
       if (!id) push(`segments.${i}.id`, '编号不能为空')
-      return { id, length: parseLen(row.length, `segments.${i}.length`) }
+      return {
+        id,
+        length: parseLen(row.length, `segments.${i}.length`),
+        allowance: parseAllowance(row.allowance, `segments.${i}.allowance`),
+      }
     })
     if (local.size > 0) {
       setErrors(local)
@@ -251,6 +268,22 @@ export default function PlanForm({ initial, sourcePlanId = null }: PlanFormProps
                 }
               />
               <FieldErrors messages={fieldError(`segments.${i}.length`)} />
+            </label>
+            <label>
+              余量（mm，可空）
+              <input
+                data-testid={`segment-allowance-${i}`}
+                type="number"
+                min={0}
+                max={MAX_ALLOWANCE}
+                step={1}
+                placeholder="0"
+                value={row.allowance}
+                onChange={(e) =>
+                  setRows(updateRow(rows, row.key, { allowance: e.target.value }))
+                }
+              />
+              <FieldErrors messages={fieldError(`segments.${i}.allowance`)} />
             </label>
             <button
               type="button"
