@@ -17,6 +17,9 @@ class PlanCreate(BaseModel):
     roll_length: int = Field(ge=MIN_LEN, le=MAX_LEN)
     kerf_width: int = Field(ge=MIN_LEN, le=MAX_LEN)
     segments: list[SegmentIn] = Field(min_length=1, max_length=MAX_SEGMENTS)
+    # Optional provenance: when present it must reference an existing plan.
+    # It never participates in solving; omitted means an ordinary new plan.
+    source_plan_id: int | None = Field(default=None, ge=1)
 
 
 class SegmentOut(BaseModel):
@@ -42,6 +45,7 @@ class PlanOut(BaseModel):
     total_kerf_count: int
     total_leftover: int
     created_at: datetime
+    source_plan_id: int | None = None
     rolls: list[RollOut]
 
 
@@ -56,3 +60,4 @@ class PlanSummary(BaseModel):
     total_kerf_count: int
     total_leftover: int
     created_at: datetime
+    source_plan_id: int | None = None

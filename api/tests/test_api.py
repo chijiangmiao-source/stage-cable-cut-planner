@@ -98,3 +98,133 @@ def test_too_many_segments_rejected(client):
 
 def test_missing_plan_404(client):
     assert client.get("/api/plans/999").status_code == 404
+
+
+def test_ordinary_create_has_null_source_and_unchanged_semantics(client):
+    resp = client.post("/api/plans", json=valid_payload())
+    assert resp.status_code == 201
+    plan = resp.json()
+    # no source carried: ordinary creation, provenance stays null
+    assert plan["source_plan_id"] is None
+
+    detail = client.get(f"/api/plans/{plan['id']}").json()
+    assert detail["source_plan_id"] is None
+    assert detail == plan
+
+    summary = client.get("/api/plans").json()[0]
+    assert summary["source_plan_id"] is None
+    assert "rolls" not in summary
+
+
+def test_adjustment_carries_source_link_without_changing_solution(client):
+    # original plan
+    original = client.post("/api/plans", json=valid_payload()).json()
+
+    # start an adjustment from the original: identical inputs, plus the link
+    payload = valid_payload()
+    payload["source_plan_id"] = original["id"]
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 201
+    adjusted = resp.json()
+    assert adjusted["id"] != original["id"]
+    assert adjusted["source_plan_id"] == original["id"]
+
+    # the solver consumes the edited inputs only: identical inputs must
+    # produce identical rolls/kerfs/leftovers; provenance has no effect
+    for key in (
+        "roll_length",
+        "kerf_width",
+        "rolls_used",
+        "total_kerf_count",
+        "total_leftover",
+        "rolls",
+    ):
+        assert adjusted[key] == original[key], key
+
+    # both plans remain independently retrievable; the original stays
+    # read-only and never points back at the adjustment
+    original_detail = client.get(f"/api/plans/{original['id']}").json()
+    assert original_detail["source_plan_id"] is None
+    adjusted_detail = client.get(f"/api/plans/{adjusted['id']}").json()
+    assert adjusted_detail["source_plan_id"] == original["id"]
+
+    # the list summary carries provenance for the new plan only
+    by_id = {p["id"]: p for p in client.get("/api/plans").json()}
+    assert by_id[original["id"]]["source_plan_id"] is None
+    assert by_id[adjusted["id"]]["source_plan_id"] == original["id"]
+
+
+def test_edited_segment_recomputes_under_existing_rules(client):
+    original = client.post("/api/plans", json=valid_payload()).json()
+    assert original["rolls_used"] == 2  # [A], [B,C]
+    assert [r["leftover"] for r in original["rolls"]] == [400, 0]
+
+    # change one segment length: B 590 -> 380. The adjustment is re-solved
+    # from the edited inputs; roll 2 recomputes to 380+400+10 = 790 (left 210).
+    payload = valid_payload()
+    payload["segments"][1]["length"] = 380
+    payload["source_plan_id"] = original["id"]
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 201
+    adjusted = resp.json()
+    assert adjusted["source_plan_id"] == original["id"]
+    assert adjusted["rolls_used"] == 2
+    assert [[s["id"] for s in r["segments"]] for r in adjusted["rolls"]] == [
+        ["A"],
+        ["B", "C"],
+    ]
+    assert [r["leftover"] for r in adjusted["rolls"]] == [400, 210]
+    assert adjusted["total_leftover"] == 610
+
+    # the original plan stays as it was — provenance never mutates it
+    original_detail = client.get(f"/api/plans/{original['id']}").json()
+    assert [r["leftover"] for r in original_detail["rolls"]] == [400, 0]
+    assert original_detail["total_leftover"] == 400
+
+
+def test_invalid_source_rejected_with_located_error_and_not_persisted(client):
+    payload = valid_payload()
+    payload["source_plan_id"] = 999
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert any(e["loc"] == ["source_plan_id"] for e in detail)
+    # no orphan link and no half-finished record
+    assert client.get("/api/plans").json() == []
+
+
+def test_invalid_source_and_invalid_segment_both_reported(client):
+    # Endpoint-level checks are accumulated in one pass: a missing source and
+    # a segment longer than the roll are reported together.
+    payload = valid_payload(roll_length=500)
+    payload["source_plan_id"] = 4242
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 422
+    locs = [e["loc"] for e in resp.json()["detail"]]
+    assert ["source_plan_id"] in locs
+    assert ["segments", 0, "length"] in locs
+    assert client.get("/api/plans").json() == []
+
+
+def test_non_positive_source_rejected_by_schema(client):
+    payload = valid_payload()
+    payload["source_plan_id"] = 0
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 422
+    assert client.get("/api/plans").json() == []
+
+
+def test_chains_of_adjustments_keep_direct_source(client):
+    first = client.post("/api/plans", json=valid_payload()).json()
+    second_payload = valid_payload()
+    second_payload["source_plan_id"] = first["id"]
+    second = client.post("/api/plans", json=second_payload).json()
+
+    third_payload = valid_payload()
+    third_payload["source_plan_id"] = second["id"]
+    third = client.post("/api/plans", json=third_payload).json()
+
+    # only the directly named source is stored (no derived semantics)
+    assert second["source_plan_id"] == first["id"]
+    assert third["source_plan_id"] == second["id"]
+    assert client.get(f"/api/plans/{first['id']}").json()["source_plan_id"] is None

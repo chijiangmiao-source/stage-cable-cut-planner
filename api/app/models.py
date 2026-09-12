@@ -16,6 +16,16 @@ class Plan(Base):
     total_leftover = Column(Integer, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
+    # Nullable link to the plan this one was adjusted from. Never read by the
+    # solver; it is provenance only. ON DELETE SET NULL keeps every plan
+    # reachable on its own even if the source plan is later removed.
+    source_plan_id = Column(
+        Integer,
+        ForeignKey("plans.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     rolls = relationship(
         "Roll",
         back_populates="plan",

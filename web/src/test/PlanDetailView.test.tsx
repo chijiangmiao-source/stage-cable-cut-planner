@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
 import PlanDetailView from '../components/PlanDetailView'
 import type { PlanOut } from '../types'
@@ -11,6 +12,7 @@ const plan: PlanOut = {
   total_kerf_count: 1,
   total_leftover: 400,
   created_at: '2026-09-12T08:00:00Z',
+  source_plan_id: null,
   rolls: [
     {
       position: 1,
@@ -32,9 +34,17 @@ const plan: PlanOut = {
   ],
 }
 
+function renderView(viewPlan: PlanOut = plan) {
+  return render(
+    <MemoryRouter>
+      <PlanDetailView plan={viewPlan} />
+    </MemoryRouter>,
+  )
+}
+
 describe('PlanDetailView', () => {
-  it('shows totals and per-roll cutting order, kerf counts and leftovers', () => {
-    const { container } = render(<PlanDetailView plan={plan} />)
+  it('shows totals and per-roll cutting order, kerfs and leftovers', () => {
+    const { container } = renderView()
     const text = container.textContent ?? ''
 
     expect(screen.getByText('第 1 卷')).toBeInTheDocument()
@@ -51,5 +61,29 @@ describe('PlanDetailView', () => {
     // totals
     expect(text).toContain('总余料')
     expect(text).toContain('400 mm')
+  })
+
+  it('offers an "adjust from this plan" entry point', () => {
+    renderView()
+    const adjust = screen.getByTestId('adjust-from-plan')
+    expect(adjust.textContent).toContain('基于此方案调整')
+    expect(adjust.getAttribute('href')).toBe('/?from=7')
+  })
+
+  it('hides the source line for plans without a source', () => {
+    renderView({ ...plan, source_plan_id: null })
+    expect(screen.queryByTestId('source-line')).not.toBeInTheDocument()
+    expect(screen.queryByText('源自方案')).not.toBeInTheDocument()
+  })
+
+  it('links to the source plan when provenance exists', () => {
+    renderView({ ...plan, id: 9, source_plan_id: 7 })
+    const sourceLine = screen.getByTestId('source-line')
+    const link = sourceLine.querySelector('a')
+    expect(link).not.toBeNull()
+    expect(link?.getAttribute('href')).toBe('/plans/7')
+    expect(link?.textContent).toBe('#7')
+    // the adjust entry of the new plan points at the new plan itself
+    expect(screen.getByTestId('adjust-from-plan').getAttribute('href')).toBe('/?from=9')
   })
 })

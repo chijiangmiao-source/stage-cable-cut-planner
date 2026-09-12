@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import type { PlanOut } from '../types'
 import RollBar from './RollBar'
 
@@ -6,6 +7,23 @@ import RollBar from './RollBar'
 export default function PlanDetailView({ plan }: { plan: PlanOut }) {
   return (
     <div className="plan-detail">
+      <p className="detail-actions">
+        <Link
+          className="button-link"
+          to={`/?from=${plan.id}`}
+          data-testid="adjust-from-plan"
+        >
+          基于此方案调整
+        </Link>
+        {plan.source_plan_id !== null && plan.source_plan_id !== undefined && (
+          <span className="source-line" data-testid="source-line">
+            源自方案
+            <Link to={`/plans/${plan.source_plan_id}`}>
+              #{plan.source_plan_id}
+            </Link>
+          </span>
+        )}
+      </p>
       <dl className="summary">
         <div>
           <dt>卷长</dt>

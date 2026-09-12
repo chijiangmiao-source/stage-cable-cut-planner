@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { ApiError, createPlan } from '../api'
 import { groupErrors } from '../errors'
 import {
@@ -12,6 +12,19 @@ import {
 } from '../segmentRows'
 import type { SegmentRow } from '../segmentRows'
 
+export interface PlanFormInitial {
+  roll_length: number
+  kerf_width: number
+  segments: { id: string; length: number }[]
+}
+
+interface PlanFormProps {
+  // When adjusting from an existing plan the roll length, kerf width and
+  // segments are carried over verbatim; the form stays fully editable.
+  initial?: PlanFormInitial
+  sourcePlanId?: number | null
+}
+
 function FieldErrors({ messages }: { messages?: string[] }) {
   if (!messages || messages.length === 0) return null
   return (
@@ -21,24 +34,53 @@ function FieldErrors({ messages }: { messages?: string[] }) {
   )
 }
 
-export default function PlanForm() {
+export default function PlanForm({ initial, sourcePlanId = null }: PlanFormProps) {
   const navigate = useNavigate()
-  const [rollLength, setRollLength] = useState('1000')
-  const [kerfWidth, setKerfWidth] = useState('10')
-  const [rows, setRows] = useState<SegmentRow[]>(() => [
-    makeRow('S1', '600'),
-    makeRow('S2', '590'),
-    makeRow('S3', '400'),
-  ])
+  const [rollLength, setRollLength] = useState(() =>
+    initial ? String(initial.roll_length) : '1000',
+  )
+  const [kerfWidth, setKerfWidth] = useState(() =>
+    initial ? String(initial.kerf_width) : '10',
+  )
+  const [rows, setRows] = useState<SegmentRow[]>(() =>
+    initial
+      ? initial.segments.map((s) => makeRow(s.id, String(s.length)))
+      : [
+          makeRow('S1', '600'),
+          makeRow('S2', '590'),
+          makeRow('S3', '400'),
+        ],
+  )
+  // Provenance only; the solver never sees anything besides the edited input.
+  const [sourceId, setSourceId] = useState<number | null>(sourcePlanId)
+  const [sourceError, setSourceError] = useState<string | null>(null)
+  const [sourcePick, setSourcePick] = useState('')
   const [errors, setErrors] = useState<Map<string, string[]>>(new Map())
   const [topError, setTopError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
   const fieldError = (key: string) => errors.get(key)
 
+  function confirmSourcePick() {
+    const value = Number(sourcePick)
+    if (!Number.isInteger(value) || value < 1) return
+    // Re-selecting a source keeps every edit in place; the next submit
+    // retries with the new provenance link.
+    setSourceId(value)
+    setSourceError(null)
+    setSourcePick('')
+    setErrors((prev) => {
+      if (!prev.has('source_plan_id')) return prev
+      const next = new Map(prev)
+      next.delete('source_plan_id')
+      return next
+    })
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
     setTopError(null)
+    setSourceError(null)
     setErrors(new Map())
 
     // Light client-side check; the API remains the authority and its 422
@@ -68,13 +110,30 @@ export default function PlanForm() {
 
     setSubmitting(true)
     try {
-      const plan = await createPlan({ roll_length, kerf_width, segments })
+      const plan = await createPlan({
+        roll_length,
+        kerf_width,
+        segments,
+        ...(sourceId !== null ? { source_plan_id: sourceId } : {}),
+      })
       navigate(`/plans/${plan.id}`)
     } catch (err) {
       // 校验失败时表单状态原样保留，领班可直接修正后重新提交。
       if (err instanceof ApiError) {
-        if (err.fieldErrors.length > 0) setErrors(groupErrors(err.fieldErrors))
-        else setTopError(err.message)
+        if (err.fieldErrors.length > 0) {
+          const grouped = groupErrors(err.fieldErrors)
+          // 字段错误仍按原方式标回对应输入框，不弹顶部横幅；来源失效时
+          // 额外给出重新选择来源的提示。
+          setErrors(grouped)
+          const sourceMsg = grouped.get('source_plan_id')
+          if (sourceMsg) {
+            // 来源已失效：编辑内容全部保留，提示重新选择来源。
+            setSourceError(sourceMsg[0])
+            setSourcePick(sourceId !== null ? String(sourceId) : '')
+          }
+        } else {
+          setTopError(err.message)
+        }
       } else {
         setTopError('网络异常，请稍后重试')
       }
@@ -89,6 +148,44 @@ export default function PlanForm() {
         <p className="error-banner" role="alert">
           {topError}
         </p>
+      )}
+
+      {sourceId !== null && !sourceError && (
+        <p className="source-banner" data-testid="source-banner">
+          基于方案 #{sourceId} 调整：卷长、锯口与线段已原样带入，可直接修改后重新求解；
+          原方案保持只读。
+          <Link to={`/plans/${sourceId}`}>查看原方案 #{sourceId}</Link>
+        </p>
+      )}
+      {sourceError && (
+        <div className="error-banner" role="alert" data-testid="source-error">
+          <p>
+            来源方案无效（{sourceError}），请重新选择来源；当前编辑内容已全部保留。
+          </p>
+          <div className="source-reselect">
+            <label>
+              来源方案编号
+              <input
+                data-testid="source-plan-input"
+                type="number"
+                min={1}
+                step={1}
+                value={sourcePick}
+                onChange={(e) => setSourcePick(e.target.value)}
+              />
+            </label>
+            <button
+              type="button"
+              data-testid="source-plan-confirm"
+              onClick={confirmSourcePick}
+            >
+              确认来源
+            </button>
+            <Link to="/plans" data-testid="source-repick-list">
+              从历史列表重新选择
+            </Link>
+          </div>
+        </div>
       )}
 
       <div className="form-grid">

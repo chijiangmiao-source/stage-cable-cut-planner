@@ -149,6 +149,106 @@ def main():
     check("plan list contains both created plans",
           plan1["id"] in ids and plan2["id"] in ids, str(ids))
 
+    # ordinary creation carries no provenance link and keeps old semantics
+    check("ordinary plan 1 has no source", plan1.get("source_plan_id") is None,
+          str(plan1.get("source_plan_id")))
+    check("ordinary plan 2 has no source", plan2.get("source_plan_id") is None,
+          str(plan2.get("source_plan_id")))
+    ordinary = plans[[p["id"] for p in plans].index(plan2["id"])]
+    check("ordinary plan summary has no source and unchanged fields",
+          ordinary.get("source_plan_id") is None
+          and ordinary.get("segment_count") == 4
+          and "rolls" not in ordinary, str(ordinary))
+
+    # --- adjustment from a saved plan ----------------------------------------
+    source_payload = {
+        "roll_length": 1000,
+        "kerf_width": 10,
+        "segments": [
+            {"id": "A", "length": 600},
+            {"id": "B", "length": 590},
+            {"id": "C", "length": 400},
+        ],
+    }
+    status, source_plan = request("POST", f"{WEB_URL}/api/plans", source_payload)
+    check("source plan created for adjustment",
+          status == 201 and isinstance(source_plan, dict), str(source_plan))
+    if not isinstance(source_plan, dict):
+        sys.exit(1)
+    source_id = source_plan["id"]
+    check("source plan has no provenance of its own",
+          source_plan.get("source_plan_id") is None, str(source_plan))
+    check("source plan result is [A] / [B,C]",
+          [[s["id"] for s in r["segments"]] for r in source_plan["rolls"]]
+          == [["A"], ["B", "C"]], str(source_plan))
+
+    # start the adjustment carrying the source id; edit one segment (B 590 -> 380)
+    adjusted_payload = {
+        "roll_length": 1000,
+        "kerf_width": 10,
+        "source_plan_id": source_id,
+        "segments": [
+            {"id": "A", "length": 600},
+            {"id": "B", "length": 380},
+            {"id": "C", "length": 400},
+        ],
+    }
+    status, adjusted = request("POST", f"{WEB_URL}/api/plans", adjusted_payload)
+    check("adjustment created with source link",
+          status == 201 and isinstance(adjusted, dict), str(adjusted))
+    if not isinstance(adjusted, dict):
+        sys.exit(1)
+    adjusted_id = adjusted["id"]
+    check("adjustment is a distinct new plan", adjusted_id != source_id,
+          f"{adjusted_id} vs {source_id}")
+    check("adjustment stores the source id",
+          adjusted.get("source_plan_id") == source_id, str(adjusted))
+
+    # the solver consumes edited inputs only: roll 2 recomputes to
+    # 380+400+10 = 790 (leftover 210), total leftover 610; roll count still 2
+    check("adjustment re-solves from the edited segment",
+          adjusted["rolls_used"] == 2
+          and [r["leftover"] for r in adjusted["rolls"]] == [400, 210]
+          and adjusted["total_leftover"] == 610, str(adjusted))
+
+    # old and new are each retrievable; the source link target resolves
+    status, adjusted_detail = request("GET", f"{API_URL}/api/plans/{adjusted_id}")
+    check("adjusted plan retrievable", status == 200 and adjusted_detail == adjusted)
+    status, source_detail = request("GET", f"{WEB_URL}/api/plans/{source_id}")
+    check("source link jumps to the original plan",
+          status == 200 and source_detail.get("id") == source_id, str(status))
+    check("original plan stays unchanged and read-only after adjustment",
+          source_detail == source_plan
+          and [r["leftover"] for r in source_detail["rolls"]] == [400, 0],
+          "original mutated")
+
+    # history list shows provenance for the adjustment only
+    status, plans = request("GET", f"{API_URL}/api/plans")
+    by_id = {p["id"]: p for p in plans}
+    check("list summary links adjustment to source",
+          by_id[adjusted_id]["source_plan_id"] == source_id, str(by_id[adjusted_id]))
+    check("list summary leaves the source without provenance",
+          by_id[source_id]["source_plan_id"] is None, str(by_id[source_id]))
+
+    # --- invalid source: located 422, edits preserved server-side as no row --
+    before_ids = {p["id"] for p in plans}
+    bad_source = dict(adjusted_payload)
+    bad_source["source_plan_id"] = 999999
+    status, body = request("POST", f"{WEB_URL}/api/plans", bad_source)
+    check("invalid source -> 422", status == 422, str(body))
+    check("invalid source error locates source_plan_id",
+          ["source_plan_id"] in locs_of(body), str(body))
+    status, plans_after = request("GET", f"{API_URL}/api/plans")
+    after_ids = {p["id"] for p in plans_after}
+    check("invalid source creates no orphan link or half record",
+          after_ids == before_ids, f"{before_ids} -> {after_ids}")
+
+    # an omitted source still follows the ordinary flow
+    status, ordinary_plan = request("POST", f"{API_URL}/api/plans", source_payload)
+    check("source-less creation still works",
+          status == 201 and ordinary_plan.get("source_plan_id") is None,
+          str(ordinary_plan))
+
     print()
     if failures:
         print(f"VERIFY FAILED: {len(failures)} check(s) failed")

@@ -19,6 +19,7 @@ export interface PlanOut {
   total_kerf_count: number
   total_leftover: number
   created_at: string
+  source_plan_id: number | null
   rolls: RollOut[]
 }
 
@@ -31,6 +32,7 @@ export interface PlanSummary {
   total_kerf_count: number
   total_leftover: number
   created_at: string
+  source_plan_id: number | null
 }
 
 export interface SegmentInput {
@@ -42,6 +44,7 @@ export interface PlanCreateInput {
   roll_length: number
   kerf_width: number
   segments: SegmentInput[]
+  source_plan_id?: number | null
 }
 
 export interface FieldError {

@@ -229,3 +229,75 @@ button:disabled {
 .plan-table th {
   background: #f0f4f8;
 }
+
+.muted {
+  color: #9aa5b1;
+}
+
+.detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 0 0 16px;
+}
+
+.button-link {
+  display: inline-block;
+  padding: 6px 14px;
+  border: 1px solid #2563eb;
+  border-radius: 4px;
+  background: #2563eb;
+  color: #fff !important;
+  font-size: 0.95rem;
+  text-decoration: none;
+}
+
+.source-line {
+  font-size: 0.9rem;
+  color: #52606d;
+}
+
+.source-line a,
+.source-banner a,
+.source-reselect a {
+  margin-left: 6px;
+  color: #2563eb;
+}
+
+.source-banner {
+  background: #eff6ff;
+  border: 1px solid #93c5fd;
+  color: #1e3a8a;
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 0.9rem;
+}
+
+.source-reselect {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.source-reselect label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85rem;
+}
+
+.source-reselect input {
+  padding: 6px 8px;
+  border: 1px solid #9aa5b1;
+  border-radius: 4px;
+  font-size: 1rem;
+  min-width: 140px;
+}
+
+.source-reselect button {
+  padding: 6px 14px;
+}
+

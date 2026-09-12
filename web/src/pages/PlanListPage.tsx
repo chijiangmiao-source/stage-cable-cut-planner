@@ -32,6 +32,7 @@ export default function PlanListPage() {
               <th>线段数</th>
               <th>线卷数</th>
               <th>总余料 (mm)</th>
+              <th>源自方案</th>
               <th />
             </tr>
           </thead>
@@ -45,6 +46,18 @@ export default function PlanListPage() {
                 <td>{p.segment_count}</td>
                 <td>{p.rolls_used}</td>
                 <td>{p.total_leftover}</td>
+                <td>
+                  {p.source_plan_id !== null && p.source_plan_id !== undefined ? (
+                    <Link
+                      to={`/plans/${p.source_plan_id}`}
+                      data-testid={`source-link-${p.id}`}
+                    >
+                      #{p.source_plan_id}
+                    </Link>
+                  ) : (
+                    <span className="muted">—</span>
+                  )}
+                </td>
                 <td>
                   <Link to={`/plans/${p.id}`}>查看</Link>
                 </td>

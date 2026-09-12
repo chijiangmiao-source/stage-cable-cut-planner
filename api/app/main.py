@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from .db import Base, SessionLocal, engine
+from .db import Base, SessionLocal, engine, run_migrations
 from .models import Cut, Plan, Roll
 from .schemas import PlanCreate, PlanOut, PlanSummary, RollOut, SegmentOut
 from .solver import Segment, solve
@@ -14,6 +14,7 @@ from .solver import Segment, solve
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
+    run_migrations()
     yield
 
 
@@ -47,6 +48,7 @@ def _plan_to_out(plan: Plan) -> PlanOut:
         total_kerf_count=plan.total_kerf_count,
         total_leftover=plan.total_leftover,
         created_at=plan.created_at,
+        source_plan_id=plan.source_plan_id,
         rolls=[
             RollOut(
                 position=roll.position,
@@ -87,6 +89,22 @@ def create_plan(payload: PlanCreate, db: Session = Depends(get_db)):
                     f"{payload.roll_length}",
                 )
             )
+
+    # Provenance check: an adjustment request must name an existing plan.
+    # A missing source is a field-level 422 (the form keeps all edits and
+    # prompts to re-pick), never a dangling link or a half-written record.
+    if payload.source_plan_id is not None:
+        source_exists = db.scalar(
+            select(Plan.id).where(Plan.id == payload.source_plan_id)
+        )
+        if source_exists is None:
+            errors.append(
+                _err(
+                    ["source_plan_id"],
+                    f"source plan {payload.source_plan_id} not found",
+                )
+            )
+
     if errors:
         raise HTTPException(status_code=422, detail=errors)
 
@@ -103,6 +121,7 @@ def create_plan(payload: PlanCreate, db: Session = Depends(get_db)):
         rolls_used=solution.rolls_used,
         total_kerf_count=solution.total_kerf_count,
         total_leftover=solution.total_leftover,
+        source_plan_id=payload.source_plan_id,
     )
     for pos, roll in enumerate(solution.rolls, start=1):
         db_roll = Roll(
