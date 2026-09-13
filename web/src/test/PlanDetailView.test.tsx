@@ -19,7 +19,7 @@ function makePlan(overrides: Partial<PlanOut> = {}): PlanOut {
     rolls: [
       {
         position: 1,
-        segments: [{ id: 'A', length: 600, allowance: 0, completed_at: null }],
+        segments: [{ id: 'A', length: 600, allowance: 0, kit_id: null, completed_at: null }],
         kerf_count: 0,
         used_length: 600,
         leftover: 400,
@@ -28,8 +28,8 @@ function makePlan(overrides: Partial<PlanOut> = {}): PlanOut {
       {
         position: 2,
         segments: [
-          { id: 'B', length: 590, allowance: 0, completed_at: null },
-          { id: 'C', length: 400, allowance: 0, completed_at: null },
+          { id: 'B', length: 590, allowance: 0, kit_id: null, completed_at: null },
+          { id: 'C', length: 400, allowance: 0, kit_id: null, completed_at: null },
         ],
         kerf_count: 1,
         used_length: 1000,
@@ -89,7 +89,7 @@ describe('PlanDetailView', () => {
       rolls: [
         {
           position: 1,
-          segments: [{ id: 'A', length: 600, allowance: 0, completed_at: null }],
+          segments: [{ id: 'A', length: 600, allowance: 0, kit_id: null, completed_at: null }],
           kerf_count: 0,
           used_length: 600,
           leftover: 400,
@@ -102,9 +102,10 @@ describe('PlanDetailView', () => {
               id: 'B',
               length: 590,
               allowance: 0,
+              kit_id: null,
               completed_at: '2026-09-12T09:00:00Z',
             },
-            { id: 'C', length: 400, allowance: 0, completed_at: null },
+            { id: 'C', length: 400, allowance: 0, kit_id: null, completed_at: null },
           ],
           kerf_count: 1,
           used_length: 1000,
@@ -153,8 +154,8 @@ describe('PlanDetailView', () => {
           ...makePlan().rolls[1],
           completed_count: 1,
           segments: [
-            { id: 'B', length: 590, allowance: 0, completed_at: '2026-09-12T09:00:00Z' },
-            { id: 'C', length: 400, allowance: 0, completed_at: null },
+            { id: 'B', length: 590, allowance: 0, kit_id: null, completed_at: '2026-09-12T09:00:00Z' },
+            { id: 'C', length: 400, allowance: 0, kit_id: null, completed_at: null },
           ],
         },
       ],
@@ -190,7 +191,7 @@ describe('PlanDetailView', () => {
         {
           position: 1,
           segments: [
-            { id: 'A', length: 600, allowance: 0, completed_at: '2026-09-12T09:00:00Z' },
+            { id: 'A', length: 600, allowance: 0, kit_id: null, completed_at: '2026-09-12T09:00:00Z' },
           ],
           kerf_count: 0,
           used_length: 600,
@@ -200,8 +201,8 @@ describe('PlanDetailView', () => {
         {
           position: 2,
           segments: [
-            { id: 'B', length: 590, allowance: 0, completed_at: '2026-09-12T09:01:00Z' },
-            { id: 'C', length: 400, allowance: 0, completed_at: '2026-09-12T09:02:00Z' },
+            { id: 'B', length: 590, allowance: 0, kit_id: null, completed_at: '2026-09-12T09:01:00Z' },
+            { id: 'C', length: 400, allowance: 0, kit_id: null, completed_at: '2026-09-12T09:02:00Z' },
           ],
           kerf_count: 1,
           used_length: 1000,
@@ -249,7 +250,7 @@ describe('PlanDetailView', () => {
       rolls: [
         {
           position: 1,
-          segments: [{ id: 'A', length: 600, allowance: 0, completed_at: null }],
+          segments: [{ id: 'A', length: 600, allowance: 0, kit_id: null, completed_at: null }],
           kerf_count: 0,
           used_length: 600,
           leftover: 400,
@@ -257,7 +258,7 @@ describe('PlanDetailView', () => {
         },
         {
           position: 2,
-          segments: [{ id: 'B', length: 590, allowance: 0, completed_at: null }],
+          segments: [{ id: 'B', length: 590, allowance: 0, kit_id: null, completed_at: null }],
           kerf_count: 0,
           used_length: 590,
           leftover: 410,
@@ -265,7 +266,7 @@ describe('PlanDetailView', () => {
         },
         {
           position: 3,
-          segments: [{ id: 'C', length: 400, allowance: 50, completed_at: null }],
+          segments: [{ id: 'C', length: 400, allowance: 50, kit_id: null, completed_at: null }],
           kerf_count: 0,
           used_length: 450,
           leftover: 550,
@@ -282,5 +283,50 @@ describe('PlanDetailView', () => {
     expect(text).toContain(
       '450（下料合计 = 交付 400 mm + 余量 50 mm）+ 0 × 10（锯口）= 450 mm ≤ 1000 mm；余料 550 mm；锯口 0 次',
     )
+  })
+
+  it('shows the kit marker next to each member of a kit and keeps independent segments unmarked', () => {
+    const kitPlan = makePlan({
+      rolls: [
+        {
+          position: 1,
+          segments: [
+            { id: 'A', length: 400, allowance: 0, kit_id: 'SET1', completed_at: null },
+            { id: 'B', length: 400, allowance: 0, kit_id: 'SET1', completed_at: null },
+          ],
+          kerf_count: 1,
+          used_length: 810,
+          leftover: 190,
+          completed_count: 0,
+        },
+        {
+          position: 2,
+          segments: [
+            { id: 'C', length: 300, allowance: 0, kit_id: null, completed_at: null },
+          ],
+          kerf_count: 0,
+          used_length: 300,
+          leftover: 700,
+          completed_count: 0,
+        },
+      ],
+    })
+    const { container } = renderView(kitPlan)
+    const text = container.textContent ?? ''
+    // marker appears right after the cut-length description in the order line
+    expect(text).toContain(
+      'A（交付 400 mm + 余量 0 mm = 下料 400 mm）［套组 SET1］ → ' +
+        'B（交付 400 mm + 余量 0 mm = 下料 400 mm）［套组 SET1］',
+    )
+    // the independent segment on roll 2 renders exactly the legacy shape
+    expect(text).toContain('C（交付 300 mm + 余量 0 mm = 下料 300 mm）')
+    expect(text).not.toContain('C（交付 300 mm + 余量 0 mm = 下料 300 mm）［')
+    // completion mechanics are segment-based and unchanged: A is still next
+    expect(screen.getByTestId('cut-1-1')).toHaveClass('cut-status-next')
+  })
+
+  it('shows no kit marker anywhere for a plan without kits', () => {
+    const { container } = renderView()
+    expect(container.textContent ?? '').not.toContain('套组')
   })
 })

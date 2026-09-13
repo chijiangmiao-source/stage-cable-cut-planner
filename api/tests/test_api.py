@@ -319,3 +319,242 @@ def test_length_plus_allowance_exceeding_roll_located_at_allowance(client):
     # C fits, so no error points at it at all.
     assert all(loc[1] != 2 for loc in locs if len(loc) == 3)
     assert client.get("/api/plans").json() == []
+
+
+# ---------------------------------------------------------------------------
+# Segment kits (套组): members stay on one roll.
+# ---------------------------------------------------------------------------
+
+
+def _rolls_of(plan):
+    return [[s["id"] for s in r["segments"]] for r in plan["rolls"]]
+
+
+def test_request_without_kit_field_matches_legacy_plan(client):
+    # valid_payload() carries no kit_id anywhere; the solution must be
+    # identical to the old behavior and every cut reports kit_id None.
+    resp = client.post("/api/plans", json=valid_payload())
+    assert resp.status_code == 201
+    plan = resp.json()
+    assert _rolls_of(plan) == [["A"], ["B", "C"]]
+    assert all(
+        s["kit_id"] is None
+        for r in plan["rolls"] for s in r["segments"]
+    )
+    # historical-shaped response on refetch stays null and equal
+    assert client.get(f"/api/plans/{plan['id']}").json() == plan
+
+
+def test_explicit_null_and_empty_kit_ids_are_independent(client):
+    for value in (None, ""):
+        payload = valid_payload()
+        for seg in payload["segments"]:
+            seg["kit_id"] = value
+        resp = client.post("/api/plans", json=payload)
+        assert resp.status_code == 201, resp.json()
+        assert _rolls_of(resp.json()) == [["A"], ["B", "C"]]
+        assert all(
+            s["kit_id"] is None
+            for r in resp.json()["rolls"] for s in r["segments"]
+        )
+
+
+def test_fittable_kit_never_spans_rolls_and_capacity_closes(client):
+    # Independent optimum: A=400 alone, B=400 + C=300 share roll 2.
+    # Kit {A,B} forces both onto one roll: [A,B]=810, C alone.
+    payload = {
+        "roll_length": 1000,
+        "kerf_width": 10,
+        "segments": [
+            {"id": "A", "length": 400, "kit_id": "SET1"},
+            {"id": "B", "length": 400, "kit_id": "SET1"},
+            {"id": "C", "length": 300},
+        ],
+    }
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 201, resp.json()
+    plan = resp.json()
+    assert plan["rolls_used"] == 2
+    assert _rolls_of(plan) == [["A", "B"], ["C"]]
+    assert [[s["kit_id"] for s in r["segments"]] for r in plan["rolls"]] == [
+        ["SET1", "SET1"],
+        [None],
+    ]
+    # every roll still recomputes from cut lengths + kerfs
+    for roll in plan["rolls"]:
+        cut_sum = sum(s["length"] + s["allowance"] for s in roll["segments"])
+        assert roll["used_length"] == cut_sum + plan["kerf_width"] * roll["kerf_count"]
+        assert roll["used_length"] + roll["leftover"] == plan["roll_length"]
+    assert [r["leftover"] for r in plan["rolls"]] == [190, 700]
+
+    # persisted markers survive the detail refetch
+    detail = client.get(f"/api/plans/{plan['id']}")
+    assert detail.status_code == 200
+    assert detail.json() == plan
+
+
+def test_kit_counts_allowance_and_internal_kerfs(client):
+    # Cut lengths 460 (A) + 500 (C) + 10 kerf = 970 fit together; without the
+    # kit the independent optimum is [A],[B,C]. The kit pulls A and C together.
+    payload = {
+        "roll_length": 1000,
+        "kerf_width": 10,
+        "segments": [
+            {"id": "A", "length": 400, "allowance": 60, "kit_id": "G1"},
+            {"id": "B", "length": 400},
+            {"id": "C", "length": 500, "kit_id": "G1"},
+        ],
+    }
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 201, resp.json()
+    plan = resp.json()
+    assert _rolls_of(plan) == [["A", "C"], ["B"]]
+    first = plan["rolls"][0]
+    assert first["used_length"] == 460 + 500 + 10
+    assert first["leftover"] == 30
+
+
+def test_kit_with_minimum_roll_count_takes_precedence_over_lex_order(client):
+    # [A,B,C] fits one roll; the canonical one-roll solution is produced even
+    # though the first lex candidate (A alone) would split the {A,C} kit and
+    # force an infeasible remainder.
+    payload = {
+        "roll_length": 1000,
+        "kerf_width": 10,
+        "segments": [
+            {"id": "A", "length": 300, "kit_id": "K"},
+            {"id": "B", "length": 300},
+            {"id": "C", "length": 300, "kit_id": "K"},
+        ],
+    }
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 201
+    assert _rolls_of(resp.json()) == [["A", "B", "C"]]
+    assert resp.json()["rolls_used"] == 1
+
+
+def test_unfittable_kit_returns_located_errors_and_persists_nothing(client):
+    # A=600, C=400 in one kit: 600+400+10 = 1010 > 1000 (10 mm over).
+    payload = {
+        "roll_length": 1000,
+        "kerf_width": 10,
+        "segments": [
+            {"id": "A", "length": 600, "kit_id": "BIG"},
+            {"id": "B", "length": 100},
+            {"id": "C", "length": 400, "kit_id": "BIG"},
+        ],
+    }
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    # the error lands on the kit input of each member, stating the overflow
+    assert {tuple(e["loc"]) for e in detail} == {
+        ("segments", 0, "kit_id"),
+        ("segments", 2, "kit_id"),
+    }
+    for e in detail:
+        assert "BIG" in e["msg"]
+        assert "1010" in e["msg"]  # required length incl. internal kerfs
+        assert "10 mm" in e["msg"]  # overflow in millimetres
+    # the independent segment B has no kit error
+    assert all(e["loc"][1] != 1 for e in detail)
+    # failed submission produces no plan
+    assert client.get("/api/plans").json() == []
+
+
+def test_unfittable_kit_overflow_includes_member_allowances(client):
+    payload = {
+        "roll_length": 500,
+        "kerf_width": 10,
+        "segments": [
+            {"id": "A", "length": 300, "kit_id": "G"},
+            {"id": "B", "length": 150, "allowance": 50, "kit_id": "G"},
+        ],
+    }
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 422
+    locs = [tuple(e["loc"]) for e in resp.json()["detail"]]
+    assert locs == [("segments", 0, "kit_id"), ("segments", 1, "kit_id")]
+    msg = resp.json()["detail"][0]["msg"]
+    # 300 + 200 + 10 = 510, 10 mm beyond the roll
+    assert "510" in msg and "10 mm" in msg
+    assert client.get("/api/plans").json() == []
+
+
+def test_kit_error_accumulates_with_other_field_errors(client):
+    # oversized independent segment + unfittable kit reported in one response
+    payload = {
+        "roll_length": 500,
+        "kerf_width": 10,
+        "segments": [
+            {"id": "A", "length": 300, "kit_id": "G"},
+            {"id": "B", "length": 250, "kit_id": "G"},  # 300+250+10 = 560 > 500
+            {"id": "C", "length": 600},  # 600 > 500
+        ],
+    }
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 422
+    locs = {tuple(e["loc"]) for e in resp.json()["detail"]}
+    assert ("segments", 0, "kit_id") in locs
+    assert ("segments", 1, "kit_id") in locs
+    assert ("segments", 2, "length") in locs
+    assert client.get("/api/plans").json() == []
+
+
+def test_oversized_kit_member_is_blamed_on_length_not_kit(client):
+    payload = {
+        "roll_length": 500,
+        "kerf_width": 10,
+        "segments": [
+            {"id": "A", "length": 600, "kit_id": "G"},  # member exceeds the roll
+            {"id": "B", "length": 100, "kit_id": "G"},
+        ],
+    }
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 422
+    locs = {tuple(e["loc"]) for e in resp.json()["detail"]}
+    assert ("segments", 0, "length") in locs
+    # the member-level fault owns the rejection; no kit overflow is reported
+    assert not any(loc[-1] == "kit_id" for loc in locs)
+    assert client.get("/api/plans").json() == []
+
+    # same when the allowance (not the delivered length) pushes the member over
+    payload["segments"][0] = {"id": "A", "length": 400, "allowance": 200, "kit_id": "G"}
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 422
+    locs = {tuple(e["loc"]) for e in resp.json()["detail"]}
+    assert ("segments", 0, "allowance") in locs
+    assert not any(loc[-1] == "kit_id" for loc in locs)
+
+
+def test_invalid_kit_id_shape_rejected_at_field(client):
+    payload = valid_payload()
+    payload["segments"][0]["kit_id"] = "-bad-"  # must start alphanumerically
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 422
+    locs = [tuple(e["loc"]) for e in resp.json()["detail"]]
+    assert ("body", "segments", 0, "kit_id") in locs
+    assert client.get("/api/plans").json() == []
+
+
+def test_kit_marker_does_not_change_adjustment_link(client):
+    original = client.post("/api/plans", json=valid_payload()).json()
+    payload = {
+        "roll_length": 1000,
+        "kerf_width": 10,
+        "source_plan_id": original["id"],
+        "segments": [
+            {"id": "A", "length": 400, "kit_id": "SET1"},
+            {"id": "B", "length": 400, "kit_id": "SET1"},
+            {"id": "C", "length": 300},
+        ],
+    }
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 201
+    adjusted = resp.json()
+    assert adjusted["source_plan_id"] == original["id"]
+    assert _rolls_of(adjusted) == [["A", "B"], ["C"]]
+    assert all(
+        s["kit_id"] == "SET1"
+        for s in adjusted["rolls"][0]["segments"]
+    )

@@ -60,11 +60,24 @@ describe('updateRow', () => {
     expect(rows[0].allowance).toBe('50')
     expect(rows[0].length).toBe('100')
   })
+
+  it('patches the kit field without touching other inputs', () => {
+    const a = makeRow('S1', '100', '5')
+    const rows = updateRow([a], a.key, { kit: 'SET-A' })
+    expect(rows[0].kit).toBe('SET-A')
+    expect(rows[0].allowance).toBe('5')
+    expect(rows[0].id).toBe('S1')
+  })
 })
 
 describe('makeRow', () => {
   it('defaults the allowance to blank (treated as zero)', () => {
     expect(makeRow('S1', '100').allowance).toBe('')
     expect(makeRow('S1', '100', '25').allowance).toBe('25')
+  })
+
+  it('defaults the kit to blank (treated as an independent segment)', () => {
+    expect(makeRow('S1', '100').kit).toBe('')
+    expect(makeRow('S1', '100', '', 'SET1').kit).toBe('SET1')
   })
 })

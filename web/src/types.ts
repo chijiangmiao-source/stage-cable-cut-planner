@@ -2,6 +2,9 @@ export interface SegmentOut {
   id: string
   length: number
   allowance: number
+  /** Kit (套组) marker: segments sharing one kit stay on one roll.
+   *  null for independent segments and for every historical plan. */
+  kit_id: string | null
   /** ISO timestamp once this segment has actually been cut; null otherwise. */
   completed_at: string | null
 }
@@ -44,6 +47,8 @@ export interface SegmentInput {
   id: string
   length: number
   allowance?: number
+  /** Blank/omitted means an independent segment (legacy behavior). */
+  kit_id?: string
 }
 
 export interface PlanCreateInput {

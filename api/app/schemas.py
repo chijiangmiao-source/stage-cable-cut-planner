@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 MIN_LEN = 1
 MAX_LEN = 100000
@@ -8,6 +8,8 @@ MIN_ALLOWANCE = 0
 MAX_ALLOWANCE = 10000
 MAX_SEGMENTS = 12
 ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$"
+# Optional kit (套组) markers use the same shape as segment ids.
+KIT_PATTERN = ID_PATTERN
 
 
 class SegmentIn(BaseModel):
@@ -15,6 +17,17 @@ class SegmentIn(BaseModel):
     length: int = Field(ge=MIN_LEN, le=MAX_LEN)
     # Optional end-trim allowance; omitted means 0 (legacy clients).
     allowance: int = Field(default=0, ge=MIN_ALLOWANCE, le=MAX_ALLOWANCE)
+    # Optional kit id: segments sharing one kit id are kept on a single roll.
+    # Omitted/null means an independent segment, packed exactly as before.
+    # A blank string is treated as "left unfilled" and normalized to None.
+    kit_id: str | None = Field(default=None, pattern=KIT_PATTERN)
+
+    @field_validator("kit_id", mode="before")
+    @classmethod
+    def _blank_kit_is_none(cls, value):
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
 
 
 class PlanCreate(BaseModel):
@@ -30,6 +43,9 @@ class SegmentOut(BaseModel):
     id: str
     length: int
     allowance: int
+    # Kit marker echoed back alongside the cut; None for independent segments
+    # and for every historical cut.
+    kit_id: str | None = None
     # None while the segment is waiting to be cut; old plans keep None.
     completed_at: datetime | None = None
 

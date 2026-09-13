@@ -406,6 +406,126 @@ def main():
           before_count >= 0 and after_count == before_count,
           f"before={before_count} after={after_count}")
 
+    # --- kits: omitted field behaves exactly like the legacy API ------------
+    legacy = {
+        "roll_length": 1000,
+        "kerf_width": 10,
+        "segments": [
+            {"id": "A", "length": 600},
+            {"id": "B", "length": 590},
+            {"id": "C", "length": 400},
+        ],
+    }
+    status, legacy_plan = request("POST", f"{API_URL}/api/plans", legacy)
+    check("kit-less request created", status == 201 and isinstance(legacy_plan, dict),
+          str(legacy_plan))
+    if isinstance(legacy_plan, dict):
+        check("omitted kit_id keeps the legacy packing [[A],[B,C]]",
+              [[s["id"] for s in r["segments"]] for r in legacy_plan["rolls"]]
+              == [["A"], ["B", "C"]], str(legacy_plan))
+        check("omitted kit_id is reported as null on every cut",
+              all(s.get("kit_id") is None
+                  for r in legacy_plan["rolls"] for s in r["segments"]),
+              str(legacy_plan))
+        status, legacy_detail = request("GET", f"{WEB_URL}/api/plans/{legacy_plan['id']}")
+        check("kit-less plan refetches unchanged",
+              status == 200 and legacy_detail == legacy_plan, str(legacy_detail))
+
+    # --- kits: a fittable kit never spans rolls and capacity closes ----------
+    kit_payload = {
+        "roll_length": 1000,
+        "kerf_width": 10,
+        "segments": [
+            {"id": "A", "length": 400, "kit_id": "SET1"},
+            {"id": "B", "length": 400, "kit_id": "SET1"},
+            {"id": "C", "length": 300},
+        ],
+    }
+    status, kit_plan = request("POST", f"{WEB_URL}/api/plans", kit_payload)
+    check("fittable kit created", status == 201 and isinstance(kit_plan, dict),
+          str(kit_plan))
+    if not isinstance(kit_plan, dict):
+        sys.exit(1)
+    kit_rolls = [[s["id"] for s in r["segments"]] for r in kit_plan["rolls"]]
+    # independent optimum would be [A] / [B,C]; the kit forces [A,B] / [C]
+    check("kit members share one roll: [[A,B],[C]]",
+          kit_rolls == [["A", "B"], ["C"]], str(kit_rolls))
+    check("kit markers persisted and returned",
+          [[s.get("kit_id") for s in r["segments"]] for r in kit_plan["rolls"]]
+          == [["SET1", "SET1"], [None]], str(kit_plan))
+    check("kit does not change leftover arithmetic",
+          [r["leftover"] for r in kit_plan["rolls"]] == [190, 700]
+          and kit_plan["total_leftover"] == 890, str(kit_plan))
+    for roll in kit_plan["rolls"]:
+        cut_sum = sum(s["length"] + s["allowance"] for s in roll["segments"])
+        total = cut_sum + roll["kerf_count"] * kit_plan["kerf_width"] + roll["leftover"]
+        check(f"kit roll {roll['position']} capacity recomputes and closes",
+              total == kit_plan["roll_length"]
+              and roll["used_length"] + roll["leftover"] == kit_plan["roll_length"],
+              str(total))
+
+    # the same roll order and kit markers survive a detail refetch
+    status, kit_detail = request("GET", f"{API_URL}/api/plans/{kit_plan['id']}")
+    check("kit plan refetch keeps roll order and markers",
+          status == 200 and kit_detail == kit_plan, str(kit_detail))
+
+    # kit members still take part in the existing per-segment progress flow
+    status, kit_done = request(
+        "POST", f"{WEB_URL}/api/plans/{kit_plan['id']}/rolls/1/complete",
+        {"position": 1})
+    check("kit roll completes its first member in canonical order",
+          status == 200 and kit_done["rolls"][0]["segments"][0]["completed_at"]
+          is not None and kit_done["rolls"][0]["segments"][1]["completed_at"] is None,
+          str(status))
+    status, kit_undone = request(
+        "POST", f"{API_URL}/api/plans/{kit_plan['id']}/rolls/1/undo",
+        {"position": 1})
+    check("kit roll undo clears only the last completed member",
+          status == 200 and kit_undone["rolls"][0]["segments"][0]["completed_at"] is None
+          and [s["kit_id"] for s in kit_undone["rolls"][0]["segments"]]
+          == ["SET1", "SET1"], str(status))
+
+    # --- kits: an unfittable kit is located on every member and not stored ---
+    status, before_kits = request("GET", f"{API_URL}/api/plans")
+    before_kit_ids = {p["id"] for p in before_kits}
+    bad_kit = {
+        "roll_length": 1000,
+        "kerf_width": 10,
+        "segments": [
+            {"id": "A", "length": 600, "kit_id": "BIG"},
+            {"id": "B", "length": 100},
+            {"id": "C", "length": 400, "kit_id": "BIG"},
+        ],
+    }
+    status, body = request("POST", f"{WEB_URL}/api/plans", bad_kit)
+    check("unfittable kit -> 422", status == 422, str(body))
+    kit_locs = [tuple(e.get("loc", [])) for e in body.get("detail", [])]
+    check("unfittable kit error locates each member kit input",
+          ("segments", 0, "kit_id") in kit_locs
+          and ("segments", 2, "kit_id") in kit_locs
+          and ("segments", 1, "kit_id") not in kit_locs, str(kit_locs))
+    overflow_msgs = [e.get("msg", "") for e in body.get("detail", [])]
+    check("unfittable kit message states the overflow in millimetres",
+          all("1010" in m and "by 10 mm" in m for m in overflow_msgs)
+          and len(overflow_msgs) == 2, str(overflow_msgs))
+    status, after_kits = request("GET", f"{API_URL}/api/plans")
+    check("unfittable kit persisted no plan",
+          status == 200 and {p["id"] for p in after_kits} == before_kit_ids,
+          f"{before_kit_ids} -> {[p['id'] for p in after_kits]}")
+
+    # a malformed kit marker is a plain field-level 422 and stores nothing
+    malformed = dict(legacy)
+    malformed["segments"] = [
+        {"id": "A", "length": 600, "kit_id": "-bad-"}
+    ]
+    status, body = request("POST", f"{API_URL}/api/plans", malformed)
+    malformed_locs = locs_of(body)
+    check("malformed kit id -> 422 on the kit field",
+          status == 422
+          and (["body", "segments", 0, "kit_id"] in malformed_locs
+               or ["segments", 0, "kit_id"] in malformed_locs),
+          str(body))
+
     print()
     if failures:
         print(f"VERIFY FAILED: {len(failures)} check(s) failed")

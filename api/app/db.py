@@ -25,6 +25,7 @@ def run_migrations():
     ``Base.metadata.create_all`` creates missing tables but never alters an
     existing one. The provenance link stays NULL for historical plans, and
     historical cuts receive allowance 0 so their packing remains unchanged.
+    The optional kit marker stays NULL for historical cuts.
     """
     inspector = inspect(engine)
     tables = set(inspector.get_table_names())
@@ -52,4 +53,9 @@ def run_migrations():
                         "ALTER TABLE cuts "
                         "ADD COLUMN allowance INTEGER NOT NULL DEFAULT 0"
                     )
+                )
+        if "kit_id" not in columns:
+            with engine.begin() as conn:
+                conn.execute(
+                    text("ALTER TABLE cuts ADD COLUMN kit_id VARCHAR(32)")
                 )

@@ -66,6 +66,9 @@ class Cut(Base):
     segment_id = Column(String(32), nullable=False)
     length = Column(Integer, nullable=False)  # delivered length
     allowance = Column(Integer, nullable=False, default=0)  # end-trim allowance
+    # Optional kit (套组) marker: cuts sharing a value were kept on one roll.
+    # NULL for independent segments and for every historical cut.
+    kit_id = Column(String(32), nullable=True)
     # Null while the segment is still waiting to be cut; set when the
     # foreman records "complete this segment". Historical rows stay NULL.
     completed_at = Column(DateTime(timezone=True), nullable=True)

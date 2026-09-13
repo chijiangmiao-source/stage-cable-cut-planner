@@ -77,3 +77,49 @@ def test_migration_adds_nullable_source_to_legacy_schema(legacy_db):
         detail = client.get(f"/api/plans/{row.id}")
         assert detail.status_code == 200
         assert detail.json()["source_plan_id"] is None
+
+
+def test_compat_migration_adds_nullable_kit_id_to_legacy_cuts():
+    # A database whose cuts table predates both allowance and kit columns
+    # (as create_all-era deployments had) gains the nullable kit marker;
+    # historical cuts report kit_id None and keep their packing semantics.
+    Base.metadata.drop_all(bind=engine)
+    with engine.begin() as conn:
+        conn.execute(text(LEGACY_PLANS_DDL))
+        conn.execute(
+            text(
+                "CREATE TABLE rolls (id INTEGER NOT NULL PRIMARY KEY, "
+                "plan_id INTEGER NOT NULL, position INTEGER NOT NULL, "
+                "kerf_count INTEGER NOT NULL, used_length INTEGER NOT NULL, "
+                "leftover INTEGER NOT NULL)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE TABLE cuts (id INTEGER NOT NULL PRIMARY KEY, "
+                "roll_id INTEGER NOT NULL, position INTEGER NOT NULL, "
+                "segment_id VARCHAR(32) NOT NULL, length INTEGER NOT NULL)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO plans (roll_length, kerf_width, segment_count, "
+                "rolls_used, total_kerf_count, total_leftover, created_at) "
+                "VALUES (1000, 10, 1, 1, 0, 900, '2026-09-01 00:00:00+00')"
+            )
+        )
+        conn.execute(text("INSERT INTO rolls VALUES (1, 1, 1, 0, 100, 900)"))
+        conn.execute(text("INSERT INTO cuts VALUES (1, 1, 1, 'A', 100)"))
+
+    run_migrations()
+    run_migrations()  # idempotent
+
+    cols = {c["name"] for c in inspect(engine).get_columns("cuts")}
+    assert "kit_id" in cols
+    assert "allowance" in cols
+    with engine.begin() as conn:
+        row = conn.execute(text("SELECT allowance, kit_id FROM cuts")).first()
+    assert row.allowance == 0
+    assert row.kit_id is None
+
+    Base.metadata.drop_all(bind=engine)

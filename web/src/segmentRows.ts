@@ -1,17 +1,25 @@
 export const MAX_SEGMENTS = 12
 export const MAX_ALLOWANCE = 10000
+// Same shape as segment ids: start alphanumeric, then letters/digits/_/-.
+export const KIT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/
 
 export interface SegmentRow {
   key: number
   id: string
   length: string
   allowance: string
+  kit: string
 }
 
 let nextKey = 1
 
-export function makeRow(id = '', length = '', allowance = ''): SegmentRow {
-  return { key: nextKey++, id, length, allowance }
+export function makeRow(
+  id = '',
+  length = '',
+  allowance = '',
+  kit = '',
+): SegmentRow {
+  return { key: nextKey++, id, length, allowance, kit }
 }
 
 /** Smallest "S<n>" id not currently used: S1, S2, ... */
@@ -35,7 +43,7 @@ export function removeRow(rows: SegmentRow[], key: number): SegmentRow[] {
 export function updateRow(
   rows: SegmentRow[],
   key: number,
-  patch: Partial<Pick<SegmentRow, 'id' | 'length' | 'allowance'>>,
+  patch: Partial<Pick<SegmentRow, 'id' | 'length' | 'allowance' | 'kit'>>,
 ): SegmentRow[] {
   return rows.map((r) => (r.key === key ? { ...r, ...patch } : r))
 }

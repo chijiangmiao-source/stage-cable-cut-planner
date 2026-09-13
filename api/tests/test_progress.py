@@ -280,11 +280,15 @@ def test_migration_upgrades_legacy_database_keeping_history_unfinished(tmp_path)
 
     columns = {c["name"] for c in inspect(legacy).get_columns("cuts")}
     assert "completed_at" in columns
+    assert "kit_id" in columns
     with legacy.connect() as conn:
-        completed_at = conn.execute(text("SELECT completed_at FROM cuts")).scalar()
-        assert completed_at is None  # historical records stay unfinished
+        row = conn.execute(
+            text("SELECT completed_at, kit_id FROM cuts")
+        ).first()
+        assert row.completed_at is None  # historical records stay unfinished
+        assert row.kit_id is None  # historical cuts are independent segments
         revision = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert revision == "0002_cut_completed_at"
+        assert revision == "0003_cut_kit_id"
 
 
 def test_migration_builds_fresh_database(tmp_path):
@@ -292,9 +296,38 @@ def test_migration_builds_fresh_database(tmp_path):
     run_startup_migrations(fresh)
     tables = set(inspect(fresh).get_table_names())
     assert {"plans", "rolls", "cuts", "alembic_version"} <= tables
-    assert "completed_at" in {
-        c["name"] for c in inspect(fresh).get_columns("cuts")
-    }
+    cut_columns = {c["name"] for c in inspect(fresh).get_columns("cuts")}
+    assert "completed_at" in cut_columns
+    assert "kit_id" in cut_columns
+
+
+def test_legacy_database_at_completed_at_revision_gains_nullable_kit_id(tmp_path):
+    # A database already stamped at 0002 (completed_at live, kit_id absent)
+    # must be upgraded in place to 0003 with historical kit markers NULL.
+    db_path = tmp_path / "rev2.db"
+    legacy = create_engine(f"sqlite:///{db_path}")
+    with legacy.begin() as conn:
+        for stmt in LEGACY_SCHEMA_SQL.split(";"):
+            if stmt.strip():
+                conn.execute(text(stmt))
+        conn.execute(text("ALTER TABLE cuts ADD COLUMN completed_at DATETIME"))
+        conn.execute(
+            text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)")
+        )
+        conn.execute(
+            text("INSERT INTO alembic_version (version_num) VALUES "
+                 "('0002_cut_completed_at')")
+        )
+
+    run_startup_migrations(legacy)
+
+    assert "kit_id" in {c["name"] for c in inspect(legacy).get_columns("cuts")}
+    with legacy.connect() as conn:
+        assert conn.execute(text("SELECT kit_id FROM cuts")).scalar() is None
+        assert (
+            conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
+            == "0003_cut_kit_id"
+        )
 
 
 def test_migration_is_idempotent_on_current_database():
@@ -313,5 +346,5 @@ def test_migration_is_idempotent_on_current_database():
     with engine.connect() as conn:
         assert (
             conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-            == "0002_cut_completed_at"
+            == "0003_cut_kit_id"
         )

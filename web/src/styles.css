@@ -87,9 +87,16 @@ h2 {
 .segment-row {
   display: flex;
   align-items: flex-start;
+  flex-wrap: wrap;
   gap: 16px;
   padding: 8px 0;
   border-bottom: 1px dashed #e4e7eb;
+}
+
+.kit-hint {
+  margin: 4px 0 10px;
+  font-size: 0.82rem;
+  color: #7b8794;
 }
 
 .segment-index {

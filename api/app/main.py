@@ -17,7 +17,7 @@ from .schemas import (
     RollOut,
     SegmentOut,
 )
-from .solver import Segment, solve
+from .solver import Segment, find_kit_errors, solve
 
 
 @asynccontextmanager
@@ -31,7 +31,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="Roll Cutting Planner", version="1.2.0", lifespan=lifespan)
+app = FastAPI(title="Roll Cutting Planner", version="1.3.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -66,6 +66,7 @@ def _plan_to_out(plan: Plan) -> PlanOut:
                     id=cut.segment_id,
                     length=cut.length,
                     allowance=cut.allowance,
+                    kit_id=cut.kit_id,
                     completed_at=cut.completed_at,
                 )
             )
@@ -132,9 +133,6 @@ def create_plan(payload: PlanCreate, db: Session = Depends(get_db)):
                 )
             )
 
-    # Provenance check: an adjustment request must name an existing plan.
-    # A missing source is a field-level 422 (the form keeps all edits and
-    # prompts to re-pick), never a dangling link or a half-written record.
     if payload.source_plan_id is not None:
         source_exists = db.scalar(
             select(Plan.id).where(Plan.id == payload.source_plan_id)
@@ -147,13 +145,37 @@ def create_plan(payload: PlanCreate, db: Session = Depends(get_db)):
                 )
             )
 
+    # Kit feasibility is independent of the other field checks: a kit whose
+    # members cannot share one roll is reported on every member row's kit
+    # input, stating the overflow in millimetres. It is evaluated in the same
+    # pass so a request can report an oversized segment and an infeasible kit
+    # together.
+    segments_for_solve = [
+        Segment(s.id, s.length, s.allowance, s.kit_id) for s in payload.segments
+    ]
+    for kit_error in find_kit_errors(
+        payload.roll_length, payload.kerf_width, segments_for_solve
+    ):
+        for i, seg in enumerate(payload.segments):
+            if seg.kit_id != kit_error.kit_id:
+                continue
+            errors.append(
+                _err(
+                    ["segments", i, "kit_id"],
+                    f"kit {kit_error.kit_id!r} cannot fit on one roll: its cut "
+                    f"lengths plus internal kerfs total {kit_error.used_length} "
+                    f"mm, exceeding usable roll length {payload.roll_length} "
+                    f"by {kit_error.overflow_mm} mm",
+                )
+            )
+
     if errors:
         raise HTTPException(status_code=422, detail=errors)
 
     solution = solve(
         payload.roll_length,
         payload.kerf_width,
-        [Segment(s.id, s.length, s.allowance) for s in payload.segments],
+        segments_for_solve,
     )
 
     plan = Plan(
@@ -172,8 +194,9 @@ def create_plan(payload: PlanCreate, db: Session = Depends(get_db)):
             used_length=roll.used_length,
             leftover=roll.leftover,
         )
-        for cut_pos, (sid, length, allowance) in enumerate(
-            zip(roll.segment_ids, roll.lengths, roll.allowances), start=1
+        for cut_pos, (sid, length, allowance, kit_id) in enumerate(
+            zip(roll.segment_ids, roll.lengths, roll.allowances, roll.kit_ids),
+            start=1,
         ):
             db_roll.cuts.append(
                 Cut(
@@ -181,6 +204,7 @@ def create_plan(payload: PlanCreate, db: Session = Depends(get_db)):
                     segment_id=sid,
                     length=length,
                     allowance=allowance,
+                    kit_id=kit_id,
                 )
             )
         plan.rolls.append(db_roll)

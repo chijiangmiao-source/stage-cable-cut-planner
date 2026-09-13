@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { ApiError, createPlan } from '../api'
 import { groupErrors } from '../errors'
 import {
+  KIT_PATTERN,
   MAX_ALLOWANCE,
   MAX_SEGMENTS,
   addRow,
@@ -16,7 +17,12 @@ import type { SegmentRow } from '../segmentRows'
 export interface PlanFormInitial {
   roll_length: number
   kerf_width: number
-  segments: { id: string; length: number; allowance?: number }[]
+  segments: {
+    id: string
+    length: number
+    allowance?: number
+    kit_id?: string | null
+  }[]
 }
 
 interface PlanFormProps {
@@ -46,7 +52,12 @@ export default function PlanForm({ initial, sourcePlanId = null }: PlanFormProps
   const [rows, setRows] = useState<SegmentRow[]>(() =>
     initial
       ? initial.segments.map((s) =>
-          makeRow(s.id, String(s.length), String(s.allowance ?? 0)),
+          makeRow(
+            s.id,
+            String(s.length),
+            String(s.allowance ?? 0),
+            s.kit_id ?? '',
+          ),
         )
       : [
           makeRow('S1', '600'),
@@ -109,15 +120,27 @@ export default function PlanForm({ initial, sourcePlanId = null }: PlanFormProps
       }
       return value
     }
+    // Optional kit id: blank means an independent segment packed as before.
+    const parseKit = (raw: string, key: string): string | null => {
+      const value = raw.trim()
+      if (!value) return null
+      if (!KIT_PATTERN.test(value) || value.length > 32) {
+        push(key, '套组编号须以字母或数字开头，仅含字母、数字、-、_，最长 32 字符')
+        return null
+      }
+      return value
+    }
     const roll_length = parseLen(rollLength, 'roll_length')
     const kerf_width = parseLen(kerfWidth, 'kerf_width')
     const segments = rows.map((row, i) => {
       const id = row.id.trim()
       if (!id) push(`segments.${i}.id`, '编号不能为空')
+      const kit = parseKit(row.kit, `segments.${i}.kit_id`)
       return {
         id,
         length: parseLen(row.length, `segments.${i}.length`),
         allowance: parseAllowance(row.allowance, `segments.${i}.allowance`),
+        ...(kit !== null ? { kit_id: kit } : {}),
       }
     })
     if (local.size > 0) {
@@ -238,6 +261,10 @@ export default function PlanForm({ initial, sourcePlanId = null }: PlanFormProps
 
       <fieldset>
         <legend>需求线段（{rows.length} / {MAX_SEGMENTS} 条）</legend>
+        <p className="kit-hint">
+          套组（可空）：若干线段填写相同套组编号后，求解器会把它们作为不可跨卷的整体放在同一卷；
+          留空的线段仍独立排卷。整组无法装入单卷时，错误会标回该组各线段的套组输入。
+        </p>
         {rows.map((row, i) => (
           <div className="segment-row" key={row.key}>
             <span className="segment-index">#{i + 1}</span>
@@ -284,6 +311,20 @@ export default function PlanForm({ initial, sourcePlanId = null }: PlanFormProps
                 }
               />
               <FieldErrors messages={fieldError(`segments.${i}.allowance`)} />
+            </label>
+            <label>
+              套组（可空）
+              <input
+                data-testid={`segment-kit-${i}`}
+                type="text"
+                maxLength={32}
+                placeholder="独立"
+                value={row.kit}
+                onChange={(e) =>
+                  setRows(updateRow(rows, row.key, { kit: e.target.value }))
+                }
+              />
+              <FieldErrors messages={fieldError(`segments.${i}.kit_id`)} />
             </label>
             <button
               type="button"

@@ -5,7 +5,7 @@ import random
 
 import pytest
 
-from app.solver import Segment, solve
+from app.solver import KitPackingError, Segment, solve
 
 
 def ids_rolls(solution):
@@ -146,6 +146,121 @@ def test_twelve_segments_run_quickly():
 
 
 # ---------------------------------------------------------------------------
+# Kits (套组): segments sharing a kit id are indivisible across rolls.
+# ---------------------------------------------------------------------------
+
+
+def test_kit_keeps_members_on_one_roll_when_packing_would_split_them():
+    # Independent optimum is [A], [B,C] (A=400, B=400, C=300, roll 1000).
+    # Marking A and B as one kit forbids splitting them: [A,B]=810, C alone.
+    segs = [Segment("A", 400, kit_id="K1"), Segment("B", 400, kit_id="K1"),
+            Segment("C", 300)]
+    sol = solve(1000, 10, segs)
+    assert sol.rolls_used == 2
+    assert ids_rolls(sol) == (("A", "B"), ("C",))
+    first = sol.rolls[0]
+    assert first.kit_ids == ("K1", "K1")
+    assert sol.rolls[1].kit_ids == (None,)
+    assert first.used_length == 400 + 400 + 10
+    assert first.leftover == 190
+
+
+def test_kit_roll_may_share_with_other_segments_and_rolls_close():
+    # Kit {A,C}; the lexicographically smallest feasible first roll that
+    # leaves a feasible remainder is {A,B,C} (920 <= 1000), then {D}.
+    segs = [
+        Segment("A", 300, kit_id="K1"),
+        Segment("B", 300),
+        Segment("C", 300, kit_id="K1"),
+        Segment("D", 300),
+    ]
+    sol = solve(1000, 10, segs)
+    assert sol.rolls_used == 2
+    assert ids_rolls(sol) == (("A", "B", "C"), ("D",))
+    for roll in sol.rolls:
+        cut_sum = sum(
+            length + allowance
+            for length, allowance in zip(roll.lengths, roll.allowances)
+        )
+        assert roll.used_length == cut_sum + 10 * roll.kerf_count
+        assert roll.used_length + roll.leftover == 1000
+
+
+def test_kit_marks_every_cut_aligned_with_its_order():
+    segs = [
+        Segment("C", 100, kit_id="G2"),
+        Segment("A", 100, kit_id="G1"),
+        Segment("B", 100, kit_id="G1"),
+    ]
+    sol = solve(1000, 10, segs)
+    (roll,) = sol.rolls
+    assert roll.segment_ids == ("A", "B", "C")
+    assert roll.kit_ids == ("G1", "G1", "G2")
+
+
+def test_distinct_kits_and_independent_segments_coexist():
+    segs = [
+        Segment("A", 200, kit_id="K1"),
+        Segment("B", 200, kit_id="K2"),
+        Segment("C", 200, kit_id="K1"),
+        Segment("D", 200, kit_id="K2"),
+        Segment("E", 200),
+    ]
+    sol = solve(1000, 10, segs)
+    # one roll: 5*200 + 4*10 = 1040 > 1000, so two rolls; each kit intact
+    assert sol.rolls_used == 2
+    roll_of = {
+        sid: pos
+        for pos, r in enumerate(sol.rolls, start=1)
+        for sid in r.segment_ids
+    }
+    assert roll_of["A"] == roll_of["C"]
+    assert roll_of["B"] == roll_of["D"]
+
+
+def test_single_member_kit_behaves_like_independent_segment():
+    with_kit = solve(1000, 10, [
+        Segment("A", 600, kit_id="SOLO"),
+        Segment("B", 590),
+        Segment("C", 400),
+    ])
+    without = solve(1000, 10, [
+        Segment("A", 600), Segment("B", 590), Segment("C", 400),
+    ])
+    assert ids_rolls(with_kit) == ids_rolls(without) == (("A",), ("B", "C"))
+    assert with_kit.rolls[0].kit_ids == ("SOLO",)
+
+
+def test_kit_allowance_and_internal_kerfs_count_toward_capacity():
+    # Cut lengths 300 and 200 plus one internal kerf of 10 = 510 > 500:
+    # the kit cannot share one roll even though each segment alone fits.
+    segs = [Segment("A", 300, allowance=0, kit_id="K1"),
+            Segment("B", 150, allowance=50, kit_id="K1")]
+    with pytest.raises(KitPackingError) as exc:
+        solve(500, 10, segs)
+    assert exc.value.kit_id == "K1"
+    assert exc.value.overflow_mm == 10
+    assert exc.value.used_length == 510
+    assert exc.value.segment_ids == ("A", "B")
+
+
+def test_kit_members_sorted_in_error():
+    segs = [Segment("B", 400, kit_id="K1"), Segment("A", 400, kit_id="K1")]
+    with pytest.raises(KitPackingError) as exc:
+        solve(700, 10, segs)  # 400+400+10 = 810 > 700
+    assert exc.value.segment_ids == ("A", "B")
+    assert exc.value.overflow_mm == 110
+
+
+def test_kit_overflow_is_reported_even_if_other_segments_could_join():
+    # The kit by itself already exceeds the roll; extra segments are moot.
+    segs = [Segment("A", 600, kit_id="K1"), Segment("B", 600, kit_id="K1"),
+            Segment("C", 10)]
+    with pytest.raises(KitPackingError):
+        solve(1000, 10, segs)
+
+
+# ---------------------------------------------------------------------------
 # Differential testing against brute force.
 # ---------------------------------------------------------------------------
 
@@ -160,18 +275,35 @@ def _partitions(n):
             yield rest[:i] + [rest[i] | {n - 1}] + rest[i + 1 :]
 
 
-def _brute_force(roll_length, kerf, segments):
+def _brute_force(roll_length, kerf, segments, kit_labels=None):
     n = len(segments)
     ids = [s.sid for s in segments]
     cuts = [s.cut_length for s in segments]
+    kit_labels = kit_labels or [None] * n
+    kit_members: dict = {}
+    for i, label in enumerate(kit_labels):
+        if label is not None:
+            kit_members.setdefault(label, set()).add(i)
 
     def fits(block):
         return sum(cuts[i] for i in block) + kerf * (len(block) - 1) <= roll_length
+
+    def kits_intact(part):
+        block_of = {}
+        for bi, block in enumerate(part):
+            for i in block:
+                block_of[i] = bi
+        return all(
+            len({block_of[i] for i in members}) == 1
+            for members in kit_members.values()
+        )
 
     best_key = None
     best_canonical = None
     for part in _partitions(n):
         if not all(fits(b) for b in part):
+            continue
+        if not kits_intact(part):
             continue
         canonical = tuple(sorted(tuple(sorted(ids[i] for i in b)) for b in part))
         key = (len(part), canonical)
@@ -179,6 +311,26 @@ def _brute_force(roll_length, kerf, segments):
             best_key = key
             best_canonical = canonical
     return best_canonical
+
+
+def _random_kit_labels(rng, n):
+    """Group a random subset of segments into kits of size >= 2."""
+    labels = [None] * n
+    next_label = 0
+    for i in range(n):
+        if labels[i] is not None:
+            continue
+        if n >= 2 and rng.random() < 0.4:
+            j = rng.randrange(n - 1)
+            if j >= i:
+                j += 1
+            label = labels[j]
+            if label is None:
+                label = next_label
+                next_label += 1
+                labels[j] = label
+            labels[i] = label
+    return labels
 
 
 @pytest.mark.parametrize("seed", range(60))
@@ -197,3 +349,42 @@ def test_matches_brute_force(seed):
     expected = _brute_force(roll_length, kerf, segments)
     assert ids_rolls(sol) == expected
     assert sol.rolls_used == len(expected)
+
+
+@pytest.mark.parametrize("seed", range(120))
+def test_matches_brute_force_with_kits(seed):
+    rng = random.Random(1000 + seed)
+    n = rng.randint(2, 8)
+    roll_length = rng.randint(30, 120)
+    kerf = rng.randint(1, 20)
+    labels = _random_kit_labels(rng, n)
+    segments = []
+    for i in range(n):
+        length = rng.randint(1, roll_length)
+        allowance = rng.randint(0, roll_length - length)
+        kit = f"K{labels[i]}" if labels[i] is not None else None
+        segments.append(Segment(f"S{i}", length, allowance, kit))
+
+    expected = _brute_force(roll_length, kerf, segments, labels)
+    if expected is None:
+        # Some kit cannot fit one roll: the solver must refuse rather than
+        # silently split it.
+        with pytest.raises(KitPackingError):
+            solve(roll_length, kerf, segments)
+        return
+
+    sol = solve(roll_length, kerf, segments)
+    assert ids_rolls(sol) == expected
+    assert sol.rolls_used == len(expected)
+    # No kit spans two rolls.
+    roll_of = {
+        sid: pos
+        for pos, r in enumerate(sol.rolls, start=1)
+        for sid in r.segment_ids
+    }
+    for seg, label in zip(segments, labels):
+        if label is None:
+            continue
+        mates = [s.sid for s, l in zip(segments, labels) if l == label]
+        assert len({roll_of[m] for m in mates}) == 1
+        assert sol.rolls[roll_of[seg.sid] - 1].used_length <= roll_length
