@@ -27,10 +27,11 @@ function plan(
     total_leftover: 400,
     completed_segment_count: count1 + count2,
     created_at: '2026-09-12T08:00:00Z',
+    source_plan_id: null,
     rolls: [
       {
         position: 1,
-        segments: [{ id: 'A', length: 600, completed_at: done1[0] ? stamp : null }],
+        segments: [{ id: 'A', length: 600, allowance: 0, completed_at: done1[0] ? stamp : null }],
         kerf_count: 0,
         used_length: 600,
         leftover: 400,
@@ -39,8 +40,8 @@ function plan(
       {
         position: 2,
         segments: [
-          { id: 'B', length: 590, completed_at: done2[0] ? stamp : null },
-          { id: 'C', length: 400, completed_at: done2[1] ? stamp : null },
+          { id: 'B', length: 590, allowance: 0, completed_at: done2[0] ? stamp : null },
+          { id: 'C', length: 400, allowance: 0, completed_at: done2[1] ? stamp : null },
         ],
         kerf_count: 1,
         used_length: 1000,

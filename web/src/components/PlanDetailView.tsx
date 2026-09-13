@@ -14,16 +14,14 @@ function formatTime(iso: string): string {
   return new Date(iso).toLocaleString()
 }
 
-/** Segments with an allowance show delivery, allowance and actual cut length;
- * zero-allowance plans retain the original compact wording. */
+/** Every segment shows delivery, allowance and actual cut length, so a
+ * zero (or unset) allowance is stated explicitly instead of hiding the
+ * cut length behind a single number. */
 function formatSegment(seg: SegmentOut): string {
-  if (seg.allowance > 0) {
-    return (
-      `${seg.id}（交付 ${seg.length} mm + 余量 ${seg.allowance} mm = ` +
-      `下料 ${seg.length + seg.allowance} mm）`
-    )
-  }
-  return `${seg.id}（${seg.length} mm）`
+  return (
+    `${seg.id}（交付 ${seg.length} mm + 余量 ${seg.allowance} mm = ` +
+    `下料 ${seg.length + seg.allowance} mm）`
+  )
 }
 
 function SegmentStatus({

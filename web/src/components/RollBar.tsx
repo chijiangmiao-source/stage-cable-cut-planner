@@ -20,10 +20,7 @@ export default function RollBar({ roll, rollLength, kerfWidth }: Props) {
       : isNext
         ? 'rollbar-segment is-next'
         : 'rollbar-segment'
-    const measurement =
-      seg.allowance > 0
-        ? `${seg.id}: 交付 ${seg.length} mm + 余量 ${seg.allowance} mm = 下料 ${cut} mm`
-        : `${seg.id}: ${seg.length} mm`
+    const measurement = `${seg.id}: 交付 ${seg.length} mm + 余量 ${seg.allowance} mm = 下料 ${cut} mm`
     const title = isDone
       ? `${measurement}（已裁切 ${new Date(seg.completed_at as string).toLocaleString()}）`
       : isNext

@@ -67,9 +67,11 @@ describe('PlanDetailView', () => {
     expect(screen.getByText('第 1 卷')).toBeInTheDocument()
     expect(screen.getByText('第 2 卷')).toBeInTheDocument()
 
-    // cutting order with lengths so the foreman can recompute
-    expect(text).toContain('A（600 mm）')
-    expect(text).toContain('B（590 mm） → C（400 mm）')
+    // every segment states delivery, zero allowance and cut length explicitly
+    expect(text).toContain('A（交付 600 mm + 余量 0 mm = 下料 600 mm）')
+    expect(text).toContain(
+      'B（交付 590 mm + 余量 0 mm = 下料 590 mm） → C（交付 400 mm + 余量 0 mm = 下料 400 mm）',
+    )
 
     // per-roll arithmetic: 590+400 + 1×10 kerf = 1000 ≤ 1000, leftover 0
     expect(text).toContain('990（线长合计）+ 1 × 10（锯口）= 1000 mm ≤ 1000 mm；余料 0 mm；锯口 1 次')
@@ -274,6 +276,9 @@ describe('PlanDetailView', () => {
     const { container } = renderView(withAllowance)
     const text = container.textContent ?? ''
     expect(text).toContain('C（交付 400 mm + 余量 50 mm = 下料 450 mm）')
+    // zero-allowance segments in the same plan still state the zero allowance
+    expect(text).toContain('A（交付 600 mm + 余量 0 mm = 下料 600 mm）')
+    expect(text).toContain('B（交付 590 mm + 余量 0 mm = 下料 590 mm）')
     expect(text).toContain(
       '450（下料合计 = 交付 400 mm + 余量 50 mm）+ 0 × 10（锯口）= 450 mm ≤ 1000 mm；余料 550 mm；锯口 0 次',
     )

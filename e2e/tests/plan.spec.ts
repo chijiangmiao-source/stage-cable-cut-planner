@@ -37,9 +37,9 @@ test.describe('roll cutting planner', () => {
     // canonical order lives on the cutting-order line (the progress list also
     // repeats each id/length, so scope to the order line)
     const orderLines = page.locator('.cutting-order')
-    await expect(orderLines.filter({ hasText: 'A（600 mm）' })).toBeVisible()
+    await expect(orderLines.filter({ hasText: 'A（交付 600 mm + 余量 0 mm = 下料 600 mm）' })).toBeVisible()
     await expect(
-      orderLines.filter({ hasText: /B（590 mm） → C（400 mm）/ }),
+      orderLines.filter({ hasText: /B（交付 590 mm \+ 余量 0 mm = 下料 590 mm） → C（交付 400 mm \+ 余量 0 mm = 下料 400 mm）/ }),
     ).toBeVisible()
     await expect(page.locator('.roll-math').filter({ hasText: /锯口 1 次/ })).toBeVisible()
     await expect(page.locator('.roll-math').filter({ hasText: /余料 0 mm/ })).toBeVisible()
@@ -90,7 +90,7 @@ test.describe('roll cutting planner', () => {
     await expect(page.getByTestId('cut-1-1')).toHaveClass(/cut-status-next/)
 
     // original cutting order, kerfs and leftovers stay on display throughout
-    await expect(page.getByText(/B（590 mm） → C（400 mm）/)).toBeVisible()
+    await expect(page.getByText(/B（交付 590 mm \+ 余量 0 mm = 下料 590 mm） → C（交付 400 mm \+ 余量 0 mm = 下料 400 mm）/)).toBeVisible()
     await expect(page.getByText(/锯口 1 次/)).toBeVisible()
     await expect(page.getByText(/余料 400 mm/)).toBeVisible()
     await expect(page.getByText(/余料 0 mm/)).toBeVisible()
@@ -127,10 +127,10 @@ test.describe('roll cutting planner', () => {
     // no recorded progress and the original canonical solution is unchanged
     await expect(page.getByTestId('overall-progress')).toHaveText('0 / 3 段')
     await expect(
-      page.locator('.cutting-order').filter({ hasText: 'A（600 mm）' }),
+      page.locator('.cutting-order').filter({ hasText: 'A（交付 600 mm + 余量 0 mm = 下料 600 mm）' }),
     ).toBeVisible()
     await expect(
-      page.locator('.cutting-order').filter({ hasText: /B（590 mm） → C（400 mm）/ }),
+      page.locator('.cutting-order').filter({ hasText: /B（交付 590 mm \+ 余量 0 mm = 下料 590 mm） → C（交付 400 mm \+ 余量 0 mm = 下料 400 mm）/ }),
     ).toBeVisible()
     await expect(page.locator('.roll-math').filter({ hasText: /锯口 1 次/ })).toBeVisible()
     await expect(page.locator('.roll-math').filter({ hasText: /余料 400 mm/ })).toBeVisible()
@@ -250,7 +250,7 @@ test.describe('roll cutting planner', () => {
       // follow the source link back: the original plan is untouched/read-only
       await sourceLine.getByRole('link').click()
       await expect(page).toHaveURL(`/plans/${originalId}`)
-      await expect(page.getByText(/B（590 mm） → C（400 mm）/)).toBeVisible()
+      await expect(page.getByText(/B（交付 590 mm \+ 余量 0 mm = 下料 590 mm） → C（交付 400 mm \+ 余量 0 mm = 下料 400 mm）/)).toBeVisible()
       await expect(page.getByText(/余料 0 mm/)).toBeVisible()
       await expect(page.getByTestId('source-line')).toHaveCount(0)
 
@@ -329,7 +329,7 @@ test.describe('roll cutting planner', () => {
       const adjustedId = Number(page.url().split('/').pop())
       expect(adjustedId).not.toBe(originalId)
       await expect(
-        page.locator('.cutting-order').filter({ hasText: /A（650 mm）/ }),
+        page.locator('.cutting-order').filter({ hasText: /A（交付 650 mm \+ 余量 0 mm = 下料 650 mm）/ }),
       ).toBeVisible()
     })
   })
@@ -362,7 +362,7 @@ test.describe('roll cutting planner', () => {
       }),
     ).toBeVisible()
     await expect(
-      page.locator('.cutting-order').filter({ hasText: /A（600 mm）/ }),
+      page.locator('.cutting-order').filter({ hasText: /A（交付 600 mm \+ 余量 0 mm = 下料 600 mm）/ }),
     ).toBeVisible()
     // leftover recomputed from the cut lengths
     await expect(page.getByText(/余料 550 mm/)).toBeVisible()
