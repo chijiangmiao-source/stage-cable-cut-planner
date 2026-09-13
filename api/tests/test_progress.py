@@ -281,6 +281,9 @@ def test_migration_upgrades_legacy_database_keeping_history_unfinished(tmp_path)
     columns = {c["name"] for c in inspect(legacy).get_columns("cuts")}
     assert "completed_at" in columns
     assert "kit_id" in columns
+    # the upgrade also creates the (empty) review-sheet tables
+    tables = set(inspect(legacy).get_table_names())
+    assert {"review_sheets", "review_measurements"} <= tables
     with legacy.connect() as conn:
         row = conn.execute(
             text("SELECT completed_at, kit_id FROM cuts")
@@ -288,14 +291,21 @@ def test_migration_upgrades_legacy_database_keeping_history_unfinished(tmp_path)
         assert row.completed_at is None  # historical records stay unfinished
         assert row.kit_id is None  # historical cuts are independent segments
         revision = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert revision == "0003_cut_kit_id"
+        assert revision == "0004_review_sheets"
 
 
 def test_migration_builds_fresh_database(tmp_path):
     fresh = create_engine(f"sqlite:///{tmp_path / 'fresh.db'}")
     run_startup_migrations(fresh)
     tables = set(inspect(fresh).get_table_names())
-    assert {"plans", "rolls", "cuts", "alembic_version"} <= tables
+    assert {
+        "plans",
+        "rolls",
+        "cuts",
+        "review_sheets",
+        "review_measurements",
+        "alembic_version",
+    } <= tables
     cut_columns = {c["name"] for c in inspect(fresh).get_columns("cuts")}
     assert "completed_at" in cut_columns
     assert "kit_id" in cut_columns
@@ -322,11 +332,15 @@ def test_legacy_database_at_completed_at_revision_gains_nullable_kit_id(tmp_path
     run_startup_migrations(legacy)
 
     assert "kit_id" in {c["name"] for c in inspect(legacy).get_columns("cuts")}
+    # upgrading past 0003 also creates the review-sheet tables
+    assert {"review_sheets", "review_measurements"} <= set(
+        inspect(legacy).get_table_names()
+    )
     with legacy.connect() as conn:
         assert conn.execute(text("SELECT kit_id FROM cuts")).scalar() is None
         assert (
             conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-            == "0003_cut_kit_id"
+            == "0004_review_sheets"
         )
 
 
@@ -346,5 +360,5 @@ def test_migration_is_idempotent_on_current_database():
     with engine.connect() as conn:
         assert (
             conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-            == "0003_cut_kit_id"
+            == "0004_review_sheets"
         )

@@ -1,4 +1,12 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    func,
+)
 from sqlalchemy.orm import relationship
 
 from .db import Base
@@ -74,3 +82,64 @@ class Cut(Base):
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
     roll = relationship("Roll", back_populates="cuts")
+
+
+class ReviewSheet(Base):
+    """用料复核单: after a batch is cut, the foreman measures the actual
+    leftover of every roll and records one review sheet against the plan.
+
+    The sheet stores the uniform tolerance plus the computed batch verdict;
+    each roll's measurement (with its computed deviation and verdict) lives
+    in ``review_measurements``. A plan gets at most one sheet (unique
+    ``plan_id``); creating a sheet never rewrites the plan, its cuts or the
+    cutting progress.
+    """
+
+    __tablename__ = "review_sheets"
+
+    id = Column(Integer, primary_key=True)
+    plan_id = Column(
+        Integer,
+        ForeignKey("plans.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    # Uniform allowed deviation (mm) shared by every roll of the batch.
+    tolerance_mm = Column(Integer, nullable=False)
+    # Whole-batch verdict: True when every roll's deviation is within the
+    # tolerance. Stored so a refetch never recomputes against a changed plan.
+    batch_ok = Column(Boolean, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    plan = relationship("Plan")
+    measurements = relationship(
+        "ReviewMeasurement",
+        back_populates="sheet",
+        order_by="ReviewMeasurement.roll_position",
+        cascade="all, delete-orphan",
+    )
+
+
+class ReviewMeasurement(Base):
+    """One roll's measured leftover plus the computed review results."""
+
+    __tablename__ = "review_measurements"
+
+    id = Column(Integer, primary_key=True)
+    sheet_id = Column(
+        Integer,
+        ForeignKey("review_sheets.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    roll_position = Column(Integer, nullable=False)  # canonical roll order, 1-based
+    # Baseline copied from the plan roll at creation time.
+    theoretical_leftover = Column(Integer, nullable=False)
+    measured_leftover = Column(Integer, nullable=False)
+    # abs(measured - theoretical), stored with the sheet.
+    deviation = Column(Integer, nullable=False)
+    # Per-roll verdict: deviation <= tolerance.
+    ok = Column(Boolean, nullable=False)
+
+    sheet = relationship("ReviewSheet", back_populates="measurements")

@@ -79,6 +79,13 @@ export default function PlanDetailView({ plan, busy, onComplete, onUndo }: Props
         >
           基于此方案调整
         </Link>
+        <Link
+          className="button-link"
+          to={`/plans/${plan.id}/review`}
+          data-testid="create-review-sheet"
+        >
+          建立用料复核单
+        </Link>
         {plan.source_plan_id !== null && plan.source_plan_id !== undefined && (
           <span className="source-line" data-testid="source-line">
             源自方案

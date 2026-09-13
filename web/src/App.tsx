@@ -2,6 +2,8 @@ import { Link, Route, Routes } from 'react-router-dom'
 import NewPlanPage from './pages/NewPlanPage'
 import PlanListPage from './pages/PlanListPage'
 import PlanDetailPage from './pages/PlanDetailPage'
+import NewReviewSheetPage from './pages/NewReviewSheetPage'
+import ReviewSheetDetailPage from './pages/ReviewSheetDetailPage'
 
 export default function App() {
   return (
@@ -18,6 +20,8 @@ export default function App() {
           <Route path="/" element={<NewPlanPage />} />
           <Route path="/plans" element={<PlanListPage />} />
           <Route path="/plans/:id" element={<PlanDetailPage />} />
+          <Route path="/plans/:id/review" element={<NewReviewSheetPage />} />
+          <Route path="/review-sheets/:id" element={<ReviewSheetDetailPage />} />
         </Routes>
       </main>
     </div>

@@ -394,3 +394,54 @@ button:disabled {
   padding: 6px 14px;
 }
 
+
+/* --- material review sheets (用料复核单) --- */
+
+.theoretical-leftover {
+  padding-top: 26px;
+  font-size: 0.9rem;
+  color: #52606d;
+  font-variant-numeric: tabular-nums;
+}
+
+.verdict-banner {
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-weight: 600;
+}
+
+.verdict-banner.verdict-ok {
+  background: #e7f6ec;
+  border: 1px solid #65c18c;
+  color: #1c6b3a;
+}
+
+.verdict-banner.verdict-bad {
+  background: #fde8e8;
+  border: 1px solid #f98080;
+  color: #c81e1e;
+}
+
+.verdict-tag {
+  display: inline-block;
+  padding: 1px 10px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  border: 1px solid;
+}
+
+.verdict-tag.verdict-ok {
+  background: #e7f6ec;
+  border-color: #65c18c;
+  color: #1c6b3a;
+}
+
+.verdict-tag.verdict-bad {
+  background: #fde8e8;
+  border-color: #f98080;
+  color: #c81e1e;
+}
+
+.review-table td {
+  font-variant-numeric: tabular-nums;
+}

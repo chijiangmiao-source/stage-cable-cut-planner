@@ -38,7 +38,7 @@ WEB_PORT=3000 API_PORT=9000 docker compose up --build -d
 docker compose up --build --exit-code-from verify verify
 ```
 
-`verify` 会经由 web 的 nginx 代理与 api 直连分别检查：非法输入返回 422 且定位到字段、不写入记录、锯口计入卷容量、决胜规则输出唯一方案、每卷可逐段复算、方案持久化并可回查；还会验收来源调整关联、裁切进度的顺序完成与末段撤销，以及省略余量与旧行为一致、余量改变分卷、详情闭合和超限不落库；并验收省略套组与旧方案一致、可容纳套组不跨卷且容量复算闭合、不可容纳套组返回定位错误且不落库。
+`verify` 会经由 web 的 nginx 代理与 api 直连分别检查：非法输入返回 422 且定位到字段、不写入记录、锯口计入卷容量、决胜规则输出唯一方案、每卷可逐段复算、方案持久化并可回查；还会验收来源调整关联、裁切进度的顺序完成与末段撤销，以及省略余量与旧行为一致、余量改变分卷、详情闭合和超限不落库；并验收省略套组与旧方案一致、可容纳套组不跨卷且容量复算闭合、不可容纳套组返回定位错误且不落库。最后验收用料复核单：从已完成裁切的多卷方案建单并刷新核对、临界偏差合格、超差整批异常、重复建单冲突且不改数据，以及各类非法录入定位到字段或卷行且不留半成品记录。
 
 ## 输入边界
 
@@ -84,6 +84,9 @@ docker compose up --build --exit-code-from verify verify
 | GET | `/api/plans/{id}` | 方案详情：每卷裁切顺序、锯口次数、余料、裁切进度（含可空 `source_plan_id`） |
 | POST | `/api/plans/{id}/rolls/{r}/complete` | 完成该卷最前面的待切线段（体 `{"position": n}`） |
 | POST | `/api/plans/{id}/rolls/{r}/undo` | 撤销该卷最后完成的一段（体 `{"position": n}`） |
+| POST | `/api/review-sheets` | 建立用料复核单：校验 → 计算偏差与结论 → 持久化（201；重复建单 409） |
+| GET | `/api/review-sheets/{id}` | 复核单详情：理论值、实测值、绝对偏差、逐卷结论与整批结论 |
+| GET | `/api/plans/{id}/review-sheet` | 查询某方案的复核单（未建单返回 404） |
 
 ### 基于已有方案调整
 
@@ -121,11 +124,47 @@ docker compose up --build --exit-code-from verify verify
 - 进度只影响 `completed_at` 与完成数量；求解结果、卷序/段序、锯口与余料
   始终不变。历史方案的 `completed_at` 全为 `null`（视为未完成）。
 
+### 用料复核单
+
+每批裁切结束后，领班在方案详情页点「建立用料复核单」，从已保存方案建单：
+
+- 页面按规范卷序带出每卷理论余料（来自方案求解结果），领班只为每卷录入
+  一次整数毫米实测余料，并填写全批统一的允许偏差（0–10000 mm）。
+- 系统以方案余料为基准计算每卷绝对偏差 `|实测 − 理论|`：偏差 ≤ 允许偏差
+  该卷合格（临界值也算合格）；任何一卷超差即判定**整批用料异常**。
+- 提交成功进入只读详情（`/review-sheets/{id}`），展示理论值、实测值、
+  绝对偏差、逐卷结论与整批结论；复核单已持久化，刷新后仍能回查。
+- 每个方案最多一张复核单：重复建单返回 **409**，原单、方案、线段与裁切
+  进度都不受影响；前端提示并给出既有复核单链接，整单输入保留。
+- 卷序缺失、重复或不属于所选方案时返回 **422**，错误定位到 `measurements`
+  或对应卷行（`measurements.{i}.roll_position`）；实测值与允许偏差类型
+  错误或越界（实测 0–100000 mm）时定位到对应字段。任何校验失败都不在
+  数据库留下半成品记录。
+
+请求示例：
+
+```json
+{
+  "plan_id": 7,
+  "tolerance_mm": 20,
+  "measurements": [
+    {"roll_position": 1, "measured_leftover": 380},
+    {"roll_position": 2, "measured_leftover": 20}
+  ]
+}
+```
+
+响应（201）逐卷返回 `theoretical_leftover`、`measured_leftover`、`deviation`、
+`ok`，以及整批复结论 `batch_ok`；复核单与卷测量记录分别存于
+`review_sheets` 与 `review_measurements` 两表，输入与计算结果一起持久化。
+
 数据库结构由 Alembic 管理（`api/migrations/`）：应用启动时自动迁移——
 全新库按迁移链建表，旧库先标记到基线版本再补加可空的 `cuts.completed_at`
 列（历史记录保持未完成）；启动兼容迁移同时补齐可空的 `plans.source_plan_id`
 及索引（历史方案来源为空）、非空的 `cuts.allowance`（历史记录为 0），以及
-可空的 `cuts.kit_id`（历史线段不属于任何套组）。
+可空的 `cuts.kit_id`（历史线段不属于任何套组）。`0004` 迁移新建
+`review_sheets` / `review_measurements` 两表，历史方案无需任何变更即可
+直接访问，只是尚未建单（按方案查复核单返回 404）。
 已是最新时为空操作。也可手动执行：
 
 ```bash

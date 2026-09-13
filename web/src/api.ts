@@ -1,4 +1,11 @@
-import type { FieldError, PlanCreateInput, PlanOut, PlanSummary } from './types'
+import type {
+  FieldError,
+  PlanCreateInput,
+  PlanOut,
+  PlanSummary,
+  ReviewSheetCreateInput,
+  ReviewSheetOut,
+} from './types'
 
 export class ApiError extends Error {
   readonly status: number
@@ -86,4 +93,31 @@ export function undoCut(
       body: JSON.stringify({ position }),
     },
   )
+}
+
+/** Create the material review sheet for a saved plan. The server answers
+ *  422 with located field errors and 409 when the plan already has a sheet;
+ *  in both cases nothing is persisted. */
+export function createReviewSheet(
+  input: ReviewSheetCreateInput,
+): Promise<ReviewSheetOut> {
+  return request<ReviewSheetOut>('/api/review-sheets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
+export function getReviewSheet(id: string | number): Promise<ReviewSheetOut> {
+  return request<ReviewSheetOut>(`/api/review-sheets/${id}`)
+}
+
+/** The review sheet of a plan, or null when the plan has none yet (404). */
+export async function getPlanReviewSheet(
+  planId: string | number,
+): Promise<ReviewSheetOut | null> {
+  const res = await fetch(`/api/plans/${planId}/review-sheet`)
+  if (res.status === 404) return null
+  if (!res.ok) throw await parseError(res)
+  return (await res.json()) as ReviewSheetOut
 }

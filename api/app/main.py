@@ -4,16 +4,20 @@ from datetime import datetime, timezone
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .db import Base, SessionLocal, engine, run_migrations
 from .migrations import run_startup_migrations
-from .models import Cut, Plan, Roll
+from .models import Cut, Plan, ReviewMeasurement, ReviewSheet, Roll
 from .schemas import (
     CutAction,
     PlanCreate,
     PlanOut,
     PlanSummary,
+    ReviewMeasurementOut,
+    ReviewSheetCreate,
+    ReviewSheetOut,
     RollOut,
     SegmentOut,
 )
@@ -31,7 +35,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="Roll Cutting Planner", version="1.3.0", lifespan=lifespan)
+app = FastAPI(title="Roll Cutting Planner", version="1.4.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -325,3 +329,135 @@ def undo_cut(
 
     db.expire_all()
     return _plan_to_out(_get_plan_or_404(db, plan_id))
+
+
+# --- material review sheets (用料复核单) -------------------------------------
+
+REVIEW_DUPLICATE_DETAIL = "该方案已建立用料复核单，不能重复建单"
+
+
+def _sheet_to_out(sheet: ReviewSheet) -> ReviewSheetOut:
+    return ReviewSheetOut(
+        id=sheet.id,
+        plan_id=sheet.plan_id,
+        tolerance_mm=sheet.tolerance_mm,
+        batch_ok=sheet.batch_ok,
+        created_at=sheet.created_at,
+        measurements=[
+            ReviewMeasurementOut(
+                roll_position=m.roll_position,
+                theoretical_leftover=m.theoretical_leftover,
+                measured_leftover=m.measured_leftover,
+                deviation=m.deviation,
+                ok=m.ok,
+            )
+            for m in sheet.measurements
+        ],
+    )
+
+
+@app.post("/api/review-sheets", response_model=ReviewSheetOut, status_code=201)
+def create_review_sheet(payload: ReviewSheetCreate, db: Session = Depends(get_db)):
+    """Record one review sheet for a saved plan. The plan's stored leftovers
+    are the baseline; every roll must be measured exactly once. The sheet,
+    its per-roll deviations and both verdicts are persisted in a single
+    transaction — the plan, its cuts and the cutting progress are never
+    rewritten, and any validation error leaves no half-written sheet."""
+    plan = db.get(Plan, payload.plan_id)
+    if plan is None:
+        raise HTTPException(
+            status_code=422,
+            detail=[_err(["plan_id"], f"plan {payload.plan_id} not found")],
+        )
+
+    # Canonical roll order -> theoretical leftover baseline.
+    leftovers = {roll.position: roll.leftover for roll in plan.rolls}
+
+    errors: list[dict] = []
+    seen: set[int] = set()
+    for i, m in enumerate(payload.measurements):
+        position = m.roll_position
+        if position in seen:
+            errors.append(
+                _err(
+                    ["measurements", i, "roll_position"],
+                    f"duplicate roll position {position}",
+                )
+            )
+        elif position not in leftovers:
+            errors.append(
+                _err(
+                    ["measurements", i, "roll_position"],
+                    f"roll position {position} is not part of plan {plan.id}",
+                )
+            )
+        else:
+            seen.add(position)
+    missing = [pos for pos in sorted(leftovers) if pos not in seen]
+    if missing:
+        errors.append(
+            _err(
+                ["measurements"],
+                "missing measurements for roll position(s) "
+                + ", ".join(str(pos) for pos in missing),
+            )
+        )
+    if errors:
+        raise HTTPException(status_code=422, detail=errors)
+
+    # One sheet per plan; the unique constraint on plan_id is the backstop
+    # for a race between two concurrent creations.
+    existing = db.scalar(
+        select(ReviewSheet.id).where(ReviewSheet.plan_id == plan.id)
+    )
+    if existing is not None:
+        raise HTTPException(status_code=409, detail=REVIEW_DUPLICATE_DETAIL)
+
+    sheet = ReviewSheet(
+        plan_id=plan.id,
+        tolerance_mm=payload.tolerance_mm,
+        batch_ok=True,
+    )
+    for m in payload.measurements:
+        theoretical = leftovers[m.roll_position]
+        deviation = abs(m.measured_leftover - theoretical)
+        ok = deviation <= payload.tolerance_mm
+        sheet.measurements.append(
+            ReviewMeasurement(
+                roll_position=m.roll_position,
+                theoretical_leftover=theoretical,
+                measured_leftover=m.measured_leftover,
+                deviation=deviation,
+                ok=ok,
+            )
+        )
+        if not ok:
+            sheet.batch_ok = False
+
+    db.add(sheet)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=REVIEW_DUPLICATE_DETAIL)
+    db.refresh(sheet)
+    return _sheet_to_out(sheet)
+
+
+@app.get("/api/review-sheets/{sheet_id}", response_model=ReviewSheetOut)
+def get_review_sheet(sheet_id: int, db: Session = Depends(get_db)):
+    sheet = db.get(ReviewSheet, sheet_id)
+    if sheet is None:
+        raise HTTPException(status_code=404, detail="review sheet not found")
+    return _sheet_to_out(sheet)
+
+
+@app.get("/api/plans/{plan_id}/review-sheet", response_model=ReviewSheetOut)
+def get_plan_review_sheet(plan_id: int, db: Session = Depends(get_db)):
+    _get_plan_or_404(db, plan_id)
+    sheet = db.scalar(
+        select(ReviewSheet).where(ReviewSheet.plan_id == plan_id)
+    )
+    if sheet is None:
+        raise HTTPException(status_code=404, detail="review sheet not found")
+    return _sheet_to_out(sheet)

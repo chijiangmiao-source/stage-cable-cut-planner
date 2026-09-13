@@ -590,6 +590,208 @@ def main():
                or ["segments", 0, "kit_id"] in malformed_locs),
           str(body))
 
+    # --- review sheets: file one sheet per plan after the batch is cut ------
+    # A fully-cut multi-roll plan: roll 1 = [A] leftover 400, roll 2 = [B,C]
+    # leftover 0.
+    review_plan_payload = {
+        "roll_length": 1000,
+        "kerf_width": 10,
+        "segments": [
+            {"id": "A", "length": 600},
+            {"id": "B", "length": 590},
+            {"id": "C", "length": 400},
+        ],
+    }
+    status, rplan = request("POST", f"{WEB_URL}/api/plans", review_plan_payload)
+    check("review base plan created",
+          status == 201 and isinstance(rplan, dict), str(rplan))
+    if not isinstance(rplan, dict):
+        sys.exit(1)
+    rpid = rplan["id"]
+    check("review base plan leftovers are [400, 0]",
+          [r["leftover"] for r in rplan["rolls"]] == [400, 0], str(rplan))
+    for roll_pos, cuts in ((1, [1]), (2, [1, 2])):
+        for cut_pos in cuts:
+            status, _ = request(
+                "POST", f"{API_URL}/api/plans/{rpid}/rolls/{roll_pos}/complete",
+                {"position": cut_pos})
+    status, cut_plan = request("GET", f"{API_URL}/api/plans/{rpid}")
+    check("review base plan fully cut",
+          status == 200 and cut_plan.get("completed_segment_count") == 3,
+          str(cut_plan.get("completed_segment_count")))
+
+    # boundary deviations (exactly the tolerance) still pass
+    sheet_payload = {
+        "plan_id": rpid,
+        "tolerance_mm": 20,
+        "measurements": [
+            {"roll_position": 1, "measured_leftover": 380},
+            {"roll_position": 2, "measured_leftover": 20},
+        ],
+    }
+    status, sheet = request("POST", f"{WEB_URL}/api/review-sheets", sheet_payload)
+    check("review sheet created", status == 201 and isinstance(sheet, dict),
+          str(sheet))
+    if not isinstance(sheet, dict):
+        sys.exit(1)
+    check("boundary deviations pass: per-roll verdicts and batch ok",
+          [m["deviation"] for m in sheet["measurements"]] == [20, 20]
+          and [m["ok"] for m in sheet["measurements"]] == [True, True]
+          and sheet.get("batch_ok") is True, str(sheet))
+    check("sheet stores baseline, measured values and tolerance",
+          [(m["roll_position"], m["theoretical_leftover"], m["measured_leftover"])
+           for m in sheet["measurements"]] == [(1, 400, 380), (2, 0, 20)]
+          and sheet.get("tolerance_mm") == 20, str(sheet))
+
+    # refresh re-check: the persisted sheet is returned identically
+    status, sheet_refetched = request(
+        "GET", f"{API_URL}/api/review-sheets/{sheet['id']}")
+    check("sheet detail survives a refetch unchanged",
+          status == 200 and sheet_refetched == sheet, str(sheet_refetched))
+    status, sheet_by_plan = request(
+        "GET", f"{WEB_URL}/api/plans/{rpid}/review-sheet")
+    check("sheet reachable from its plan",
+          status == 200 and sheet_by_plan == sheet, str(sheet_by_plan))
+
+    # the sheet never rewrote the plan, its cuts or the recorded progress
+    status, plan_after_sheet = request("GET", f"{WEB_URL}/api/plans/{rpid}")
+    check("plan and progress unchanged after sheet creation",
+          status == 200 and plan_after_sheet == cut_plan,
+          "plan mutated by sheet creation")
+
+    # a second sheet for the same plan conflicts and changes nothing
+    status, body = request("POST", f"{API_URL}/api/review-sheets",
+                           dict(sheet_payload, tolerance_mm=5))
+    check("duplicate sheet -> 409 conflict", status == 409, str(body))
+    status, sheet_again = request(
+        "GET", f"{API_URL}/api/review-sheets/{sheet['id']}")
+    check("conflict left the original sheet untouched",
+          status == 200 and sheet_again == sheet, str(sheet_again))
+    status, plan_after_dup = request("GET", f"{API_URL}/api/plans/{rpid}")
+    check("conflict left the plan untouched",
+          status == 200 and plan_after_dup == cut_plan, "plan mutated")
+
+    # over-tolerance deviation marks the roll and the whole batch abnormal
+    status, rplan2 = request("POST", f"{API_URL}/api/plans", review_plan_payload)
+    check("second review plan created", status == 201, str(rplan2))
+    over_payload = {
+        "plan_id": rplan2["id"],
+        "tolerance_mm": 20,
+        "measurements": [
+            {"roll_position": 1, "measured_leftover": 390},
+            {"roll_position": 2, "measured_leftover": 100},
+        ],
+    }
+    status, sheet2 = request("POST", f"{WEB_URL}/api/review-sheets", over_payload)
+    check("over-tolerance sheet created", status == 201, str(sheet2))
+    check("over-tolerance roll and batch are abnormal",
+          isinstance(sheet2, dict)
+          and [m["ok"] for m in sheet2["measurements"]] == [True, False]
+          and sheet2.get("batch_ok") is False
+          and [m["deviation"] for m in sheet2["measurements"]] == [10, 100],
+          str(sheet2))
+    status, sheet2_refetched = request(
+        "GET", f"{WEB_URL}/api/review-sheets/{sheet2['id']}")
+    check("abnormal sheet refetches unchanged",
+          status == 200 and sheet2_refetched == sheet2, str(sheet2_refetched))
+
+    # --- review sheets: invalid submissions are located and persist nothing --
+    status, rplan3 = request("POST", f"{API_URL}/api/plans", review_plan_payload)
+    check("third review plan created", status == 201, str(rplan3))
+    rpid3 = rplan3["id"]
+
+    def no_sheet():
+        status, _ = request("GET", f"{API_URL}/api/plans/{rpid3}/review-sheet")
+        return status == 404
+
+    missing = {
+        "plan_id": rpid3,
+        "tolerance_mm": 20,
+        "measurements": [{"roll_position": 1, "measured_leftover": 400}],
+    }
+    status, body = request("POST", f"{WEB_URL}/api/review-sheets", missing)
+    check("missing roll -> 422", status == 422, str(body))
+    check("missing roll error locates measurements",
+          ["measurements"] in locs_of(body), str(body))
+    check("missing roll persisted nothing", no_sheet())
+
+    duplicated = {
+        "plan_id": rpid3,
+        "tolerance_mm": 20,
+        "measurements": [
+            {"roll_position": 1, "measured_leftover": 400},
+            {"roll_position": 1, "measured_leftover": 390},
+        ],
+    }
+    status, body = request("POST", f"{API_URL}/api/review-sheets", duplicated)
+    check("duplicate roll -> 422", status == 422, str(body))
+    check("duplicate roll error locates the row",
+          ["measurements", 1, "roll_position"] in locs_of(body), str(body))
+    check("duplicate roll persisted nothing", no_sheet())
+
+    unknown = {
+        "plan_id": rpid3,
+        "tolerance_mm": 20,
+        "measurements": [
+            {"roll_position": 1, "measured_leftover": 400},
+            {"roll_position": 9, "measured_leftover": 0},
+        ],
+    }
+    status, body = request("POST", f"{WEB_URL}/api/review-sheets", unknown)
+    check("roll outside the plan -> 422", status == 422, str(body))
+    check("unknown roll error locates the row",
+          ["measurements", 1, "roll_position"] in locs_of(body), str(body))
+    check("unknown roll persisted nothing", no_sheet())
+
+    bad_plan = {
+        "plan_id": 999999,
+        "tolerance_mm": 20,
+        "measurements": [{"roll_position": 1, "measured_leftover": 400}],
+    }
+    status, body = request("POST", f"{API_URL}/api/review-sheets", bad_plan)
+    check("unknown plan -> 422 locating plan_id",
+          status == 422 and ["plan_id"] in locs_of(body), str(body))
+
+    # measured values and the tolerance must be genuine integers in range
+    for label, field, bad in (
+        ("bool measured", "measured", True),
+        ("string measured", "measured", "400"),
+        ("float measured", "measured", 400.0),
+        ("negative measured", "measured", -1),
+        ("oversized measured", "measured", 100001),
+        ("bool tolerance", "tolerance", True),
+        ("string tolerance", "tolerance", "20"),
+        ("float tolerance", "tolerance", 20.0),
+        ("negative tolerance", "tolerance", -1),
+        ("oversized tolerance", "tolerance", 10001),
+    ):
+        payload = {
+            "plan_id": rpid3,
+            "tolerance_mm": 20,
+            "measurements": [
+                {"roll_position": 1, "measured_leftover": 400},
+                {"roll_position": 2, "measured_leftover": 0},
+            ],
+        }
+        if field == "measured":
+            payload["measurements"][1]["measured_leftover"] = bad
+            expected_locs = (["body", "measurements", 1, "measured_leftover"],
+                             ["measurements", 1, "measured_leftover"])
+        else:
+            payload["tolerance_mm"] = bad
+            expected_locs = (["body", "tolerance_mm"], ["tolerance_mm"])
+        status, body = request("POST", f"{WEB_URL}/api/review-sheets", payload)
+        check(f"{label} -> 422", status == 422, str(body))
+        check(f"{label} error locates the field",
+              any(loc in locs_of(body) for loc in expected_locs), str(body))
+    check("all invalid review submissions persisted nothing", no_sheet())
+
+    # unknown sheet / sheet-less plan lookups are 404
+    status, _ = request("GET", f"{API_URL}/api/review-sheets/999999")
+    check("unknown sheet -> 404", status == 404, str(status))
+    status, _ = request("GET", f"{API_URL}/api/plans/999999/review-sheet")
+    check("sheet of unknown plan -> 404", status == 404, str(status))
+
     print()
     if failures:
         print(f"VERIFY FAILED: {len(failures)} check(s) failed")

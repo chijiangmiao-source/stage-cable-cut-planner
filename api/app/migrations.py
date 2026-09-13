@@ -8,7 +8,7 @@ three situations working:
 * a legacy database (tables exist, no ``alembic_version``) -> stamp the
   baseline revision matching the live schema, then upgrade (historical cuts
   keep NULL ``completed_at`` and ``kit_id`` because both columns are added
-  nullable);
+  nullable, and the review-sheet tables are simply created empty);
 * a migrated database -> ``upgrade head`` is a no-op.
 """
 
@@ -24,7 +24,8 @@ ALEMBIC_INI = API_ROOT / "alembic.ini"
 
 BASELINE_REVISION = "0001_baseline"
 COMPLETED_AT_REVISION = "0002_cut_completed_at"
-HEAD_REVISION = "0003_cut_kit_id"
+KIT_REVISION = "0003_cut_kit_id"
+HEAD_REVISION = "0004_review_sheets"
 
 
 def _config(connection) -> Config:
@@ -63,6 +64,8 @@ def run_startup_migrations(engine: Engine) -> None:
             stamp = BASELINE_REVISION
         elif "kit_id" not in cut_columns:
             stamp = COMPLETED_AT_REVISION
+        elif "review_sheets" not in tables:
+            stamp = KIT_REVISION
         else:
             stamp = HEAD_REVISION
         with engine.begin() as conn:

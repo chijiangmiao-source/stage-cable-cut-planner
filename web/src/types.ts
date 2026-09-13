@@ -63,3 +63,35 @@ export interface FieldError {
   msg: string
   type?: string
 }
+
+/** One roll's measured leftover, keyed by its canonical roll position. */
+export interface ReviewMeasurementInput {
+  roll_position: number
+  measured_leftover: number
+}
+
+export interface ReviewSheetCreateInput {
+  plan_id: number
+  /** Uniform allowed deviation (mm) applied to every roll of the batch. */
+  tolerance_mm: number
+  measurements: ReviewMeasurementInput[]
+}
+
+export interface ReviewMeasurementOut {
+  roll_position: number
+  theoretical_leftover: number
+  measured_leftover: number
+  deviation: number
+  /** Per-roll verdict: deviation within the uniform tolerance. */
+  ok: boolean
+}
+
+export interface ReviewSheetOut {
+  id: number
+  plan_id: number
+  tolerance_mm: number
+  /** Whole-batch verdict: every roll within tolerance. */
+  batch_ok: boolean
+  created_at: string
+  measurements: ReviewMeasurementOut[]
+}

@@ -96,3 +96,48 @@ class PlanSummary(BaseModel):
     total_leftover: int
     created_at: datetime
     source_plan_id: int | None = None
+
+
+# --- material review sheets (用料复核单) -------------------------------------
+
+# A measured leftover can never exceed the largest roll, and the uniform
+# tolerance uses the same ceiling as the segment allowance.
+MAX_MEASURED = MAX_LEN
+MAX_TOLERANCE = MAX_ALLOWANCE
+
+
+class ReviewMeasurementIn(BaseModel):
+    # Canonical roll position (1-based) being measured; StrictInt keeps
+    # booleans, numeric strings and floats from being coerced.
+    roll_position: StrictInt = Field(ge=1)
+    measured_leftover: StrictInt = Field(ge=0, le=MAX_MEASURED)
+
+
+class ReviewSheetCreate(BaseModel):
+    plan_id: StrictInt = Field(ge=1)
+    # Uniform allowed deviation applied to every roll of the batch.
+    tolerance_mm: StrictInt = Field(ge=0, le=MAX_TOLERANCE)
+    # One row per roll of the plan; coverage/duplicates are checked against
+    # the plan itself in the endpoint so errors can point at the exact row.
+    measurements: list[ReviewMeasurementIn] = Field(
+        min_length=1, max_length=MAX_SEGMENTS
+    )
+
+
+class ReviewMeasurementOut(BaseModel):
+    roll_position: int
+    theoretical_leftover: int
+    measured_leftover: int
+    deviation: int
+    ok: bool
+
+
+class ReviewSheetOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    plan_id: int
+    tolerance_mm: int
+    batch_ok: bool
+    created_at: datetime
+    measurements: list[ReviewMeasurementOut]
