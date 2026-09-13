@@ -97,6 +97,70 @@ def main():
     check("nothing persisted after invalid submissions",
           status == 200 and plans == [], str(plans))
 
+    # --- numeric inputs must be genuine JSON integers -----------------------
+    # bool/string/float values previously coerced silently (true -> 1 mm,
+    # "10" -> 10, 10.0 -> 10); every one must now be a located 422 and the
+    # rejected request must persist nothing.
+    int_base = {
+        "roll_length": 1000,
+        "kerf_width": 10,
+        "segments": [{"id": "T", "length": 600}],
+    }
+    for label, field, bad in (
+        ("bool roll_length", "roll_length", True),
+        ("bool kerf_width", "kerf_width", True),
+        ("string roll_length", "roll_length", "1000"),
+        ("string kerf_width", "kerf_width", "10"),
+        ("float roll_length", "roll_length", 1000.0),
+        ("float kerf_width (10.0)", "kerf_width", 10.0),
+    ):
+        payload = dict(int_base)
+        payload[field] = bad
+        status, body = request("POST", f"{API_URL}/api/plans", payload)
+        check(f"{label} -> 422", status == 422, str(body))
+        check(f"{label} error locates the field",
+              ["body", field] in locs_of(body) or [field] in locs_of(body),
+              str(body))
+
+    for label, field, bad in (
+        ("bool segment length", "length", True),
+        ("bool segment allowance", "allowance", True),
+        ("string segment length", "length", "600"),
+        ("string segment allowance", "allowance", "0"),
+        ("float segment length", "length", 600.0),
+        ("float segment allowance", "allowance", 2.5),
+    ):
+        payload = {
+            "roll_length": 1000,
+            "kerf_width": 10,
+            "segments": [{"id": "T", field: bad}],
+        }
+        status, body = request("POST", f"{WEB_URL}/api/plans", payload)
+        check(f"{label} -> 422", status == 422, str(body))
+        check(f"{label} error locates the segment field",
+              ["body", "segments", 0, field] in locs_of(body)
+              or ["segments", 0, field] in locs_of(body), str(body))
+
+    # a bare `true` source id must not alias plan 1, and no source link is made
+    type_check_payload = dict(int_base)
+    type_check_payload["segments"] = [
+        {"id": "A", "length": 600}, {"id": "B", "length": 300},
+    ]
+    status, first_plan = request("POST", f"{API_URL}/api/plans", type_check_payload)
+    check("plan created for source-id type check", status == 201, str(first_plan))
+    bool_source = dict(type_check_payload)
+    bool_source["source_plan_id"] = True
+    status, body = request("POST", f"{WEB_URL}/api/plans", bool_source)
+    check("bool source_plan_id -> 422", status == 422, str(body))
+    check("bool source error locates source_plan_id",
+          ["body", "source_plan_id"] in locs_of(body)
+          or ["source_plan_id"] in locs_of(body), str(body))
+    status, plans = request("GET", f"{API_URL}/api/plans")
+    type_check_plans = plans if status == 200 and isinstance(plans, list) else []
+    check("bool source creates no plan and no provenance link",
+          all(p.get("source_plan_id") is None for p in type_check_plans),
+          str(type_check_plans))
+
     # --- kerf accounting: 50 + 50 + 30 kerf > 100 forces two rolls ----------
     case1 = {
         "roll_length": 100,

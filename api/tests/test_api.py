@@ -214,6 +214,101 @@ def test_non_positive_source_rejected_by_schema(client):
     assert client.get("/api/plans").json() == []
 
 
+# ---------------------------------------------------------------------------
+# Numeric inputs must be genuine JSON integers. Booleans (a subclass of int
+# in Python), quoted numbers and floats must never be coerced into
+# millimetres or plan ids.
+# ---------------------------------------------------------------------------
+
+
+def test_boolean_measurements_rejected_not_treated_as_one_millimetre(client):
+    # bool previously coerced to 1, producing a "one millimetre" plan.
+    for field in ("roll_length", "kerf_width"):
+        resp = client.post("/api/plans", json=valid_payload(**{field: True}))
+        assert resp.status_code == 422, field
+        locs = [tuple(e["loc"]) for e in resp.json()["detail"]]
+        assert ("body", field) in locs, (field, locs)
+        assert client.get("/api/plans").json() == []
+
+    for field in ("length", "allowance"):
+        payload = valid_payload()
+        payload["segments"][0][field] = True
+        resp = client.post("/api/plans", json=payload)
+        assert resp.status_code == 422, field
+        locs = [tuple(e["loc"]) for e in resp.json()["detail"]]
+        assert ("body", "segments", 0, field) in locs, (field, locs)
+        assert client.get("/api/plans").json() == []
+
+
+def test_string_measurements_rejected_even_when_numeric(client):
+    # Quoted numbers previously parsed into integers and saved.
+    for field, value in (("roll_length", "1000"), ("kerf_width", "10")):
+        resp = client.post("/api/plans", json=valid_payload(**{field: value}))
+        assert resp.status_code == 422, field
+        locs = [tuple(e["loc"]) for e in resp.json()["detail"]]
+        assert ("body", field) in locs, (field, locs)
+
+    for field, value in (("length", "600"), ("allowance", "0")):
+        payload = valid_payload()
+        payload["segments"][0][field] = value
+        resp = client.post("/api/plans", json=payload)
+        assert resp.status_code == 422, field
+        locs = [tuple(e["loc"]) for e in resp.json()["detail"]]
+        assert ("body", "segments", 0, field) in locs, (field, locs)
+
+    assert client.get("/api/plans").json() == []
+
+
+def test_float_measurements_rejected_including_integral_values(client):
+    # 10.0 previously silently truncated to 10; non-integral floats too.
+    for field, value in (("roll_length", 1000.0), ("kerf_width", 10.5)):
+        resp = client.post("/api/plans", json=valid_payload(**{field: value}))
+        assert resp.status_code == 422, field
+        locs = [tuple(e["loc"]) for e in resp.json()["detail"]]
+        assert ("body", field) in locs, (field, locs)
+
+    for field, value in (("length", 600.0), ("allowance", 2.5)):
+        payload = valid_payload()
+        payload["segments"][0][field] = value
+        resp = client.post("/api/plans", json=payload)
+        assert resp.status_code == 422, field
+        locs = [tuple(e["loc"]) for e in resp.json()["detail"]]
+        assert ("body", "segments", 0, field) in locs, (field, locs)
+
+    assert client.get("/api/plans").json() == []
+
+
+def test_boolean_source_plan_id_rejected_and_never_links_to_plan_one(client):
+    # Plan 1 exists; a bare `true` must not alias it as the source.
+    original = client.post("/api/plans", json=valid_payload())
+    assert original.status_code == 201
+    assert original.json()["id"] == 1
+
+    payload = valid_payload()
+    payload["source_plan_id"] = True
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 422
+    locs = [tuple(e["loc"]) for e in resp.json()["detail"]]
+    assert ("body", "source_plan_id") in locs, locs
+
+    # nothing was created and no provenance relationship exists
+    plans = client.get("/api/plans").json()
+    assert len(plans) == 1
+    assert plans[0]["id"] == 1
+    assert plans[0]["source_plan_id"] is None
+
+
+def test_genuine_integer_measurements_still_create(client):
+    # The strict check only narrows types; well-formed integer JSON is
+    # unaffected, including an explicit integer source id.
+    original = client.post("/api/plans", json=valid_payload()).json()
+    payload = valid_payload()
+    payload["source_plan_id"] = original["id"]
+    resp = client.post("/api/plans", json=payload)
+    assert resp.status_code == 201
+    assert resp.json()["source_plan_id"] == original["id"]
+
+
 def test_chains_of_adjustments_keep_direct_source(client):
     first = client.post("/api/plans", json=valid_payload()).json()
     second_payload = valid_payload()

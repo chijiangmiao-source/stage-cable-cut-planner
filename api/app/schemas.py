@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 
 MIN_LEN = 1
 MAX_LEN = 100000
@@ -14,9 +14,11 @@ KIT_PATTERN = ID_PATTERN
 
 class SegmentIn(BaseModel):
     id: str = Field(pattern=ID_PATTERN)
-    length: int = Field(ge=MIN_LEN, le=MAX_LEN)
+    # Measurements arrive as JSON numbers; StrictInt rejects booleans,
+    # numeric strings and floats (including 10.0) instead of coercing them.
+    length: StrictInt = Field(ge=MIN_LEN, le=MAX_LEN)
     # Optional end-trim allowance; omitted means 0 (legacy clients).
-    allowance: int = Field(default=0, ge=MIN_ALLOWANCE, le=MAX_ALLOWANCE)
+    allowance: StrictInt = Field(default=0, ge=MIN_ALLOWANCE, le=MAX_ALLOWANCE)
     # Optional kit id: segments sharing one kit id are kept on a single roll.
     # Omitted/null means an independent segment, packed exactly as before.
     # A blank string is treated as "left unfilled" and normalized to None.
@@ -31,12 +33,13 @@ class SegmentIn(BaseModel):
 
 
 class PlanCreate(BaseModel):
-    roll_length: int = Field(ge=MIN_LEN, le=MAX_LEN)
-    kerf_width: int = Field(ge=MIN_LEN, le=MAX_LEN)
+    roll_length: StrictInt = Field(ge=MIN_LEN, le=MAX_LEN)
+    kerf_width: StrictInt = Field(ge=MIN_LEN, le=MAX_LEN)
     segments: list[SegmentIn] = Field(min_length=1, max_length=MAX_SEGMENTS)
     # Optional provenance: when present it must reference an existing plan.
     # It never participates in solving; omitted means an ordinary new plan.
-    source_plan_id: int | None = Field(default=None, ge=1)
+    # StrictInt keeps `true` from aliasing plan 1 (bool is an int subclass).
+    source_plan_id: StrictInt | None = Field(default=None, ge=1)
 
 
 class SegmentOut(BaseModel):
